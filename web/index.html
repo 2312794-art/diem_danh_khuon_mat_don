@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hệ thống Điểm danh Gương mặt</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --lavender: #7767e8;
+      --lavender-dark: #5e50c9;
+      --ink: #322d52;
+      --muted: #85819b;
+      --line: #eeeafa;
+      --surface: #ffffff;
+      --cream: #fffaf4;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: #f1effd;
+    }
+    .card {
+      background: rgba(255, 255, 255, .92);
+      border: 1px solid rgba(226, 222, 247, .9);
+      border-radius: 18px;
+      box-shadow: 0 12px 30px rgba(90, 77, 157, .08);
+      padding: 1.35rem;
+    }
+    .pastel-shell { background: linear-gradient(135deg, #f8f7ff 0%, #f0effd 100%); }
+    .pastel-topbar {
+      background: rgba(255,255,255,.86);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(16px);
+    }
+    .brand-mark {
+      width: 30px; height: 30px; border-radius: 10px;
+      display: inline-grid; place-items: center;
+      color: #fff; background: linear-gradient(145deg, #8e83f4, #6d5de4);
+      box-shadow: 0 7px 15px rgba(119,103,232,.25);
+      position: relative;
+      font-size: 0;
+    }
+    .brand-mark::before {
+      content: ""; width: 15px; height: 15px; border: 2px solid #fff;
+      border-radius: 6px; opacity: .95;
+    }
+    .brand-mark::after {
+      content: ""; position: absolute; width: 4px; height: 4px; border-radius: 50%;
+      background: #fff; top: 10px; left: 13px;
+      box-shadow: -4px 5px 0 -1px #fff, 4px 5px 0 -1px #fff;
+    }
+    .sidebar-link {
+      color: #817c98 !important;
+      border-radius: 11px !important;
+      font-size: .86rem;
+      transition: .2s ease;
+    }
+    .sidebar-link:hover { color: var(--lavender) !important; background: #f2efff !important; }
+    .sidebar-link.active {
+      color: var(--lavender) !important;
+      background: #eeeaff !important;
+      font-weight: 700 !important;
+    }
+    #main-content h2 { color: var(--ink); letter-spacing: -.02em; }
+    #main-content h2::after {
+      content: ""; display: block; width: 38px; height: 4px; border-radius: 999px;
+      background: #cbc4ff; margin-top: 9px;
+    }
+    #main-content input, #main-content select,
+    #user-form input, #user-form select {
+      border-color: #e6e1f5 !important; border-radius: 10px !important;
+      background: #fff !important; color: var(--ink);
+      outline: none; transition: .2s ease;
+    }
+    #main-content input:focus, #main-content select:focus,
+    #user-form input:focus, #user-form select:focus {
+      border-color: #a79df3 !important; box-shadow: 0 0 0 4px #eeecff;
+    }
+    #main-content button, #user-form button { border-radius: 10px; transition: .2s ease; }
+    #main-content table thead tr { color: #8b87a0; font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
+    #main-content table tbody tr { border-color: #f0edf8 !important; }
+    #main-content table tbody tr:hover { background: #faf9ff; }
+    .btn-primary { background: var(--lavender) !important; }
+    .btn-primary:hover { background: var(--lavender-dark) !important; transform: translateY(-1px); }
+    .dashboard-hero {
+      border-radius: 20px; padding: 1.5rem 1.75rem; color: #fff;
+      background: linear-gradient(120deg, #7565e5, #9b8ff1);
+      box-shadow: 0 14px 28px rgba(119,103,232,.2);
+      position: relative; overflow: hidden;
+    }
+    .dashboard-hero::after {
+      content: ""; position: absolute; width: 180px; height: 180px; border-radius: 50%;
+      background: rgba(255,255,255,.12); right: 8%; top: -90px;
+    }
+    .stat-card { position: relative; overflow: hidden; min-height: 126px; }
+    .stat-card .stat-icon {
+      width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center;
+      font-size: 1.15rem; margin-bottom: .8rem;
+    }
+    .stat-card .stat-watermark {
+      position: absolute; right: 18px; bottom: 8px; font-size: 3.5rem; opacity: .08;
+    }
+    .section-label { font-size: .75rem; font-weight: 700; color: #9994af; letter-spacing: .08em; text-transform: uppercase; }
+    #main-content [class~="bg-indigo-600"], #user-form [class~="bg-indigo-600"] {
+      background: var(--lavender) !important;
+    }
+    #main-content [class~="bg-indigo-600"]:hover, #user-form [class~="bg-indigo-600"]:hover {
+      background: var(--lavender-dark) !important;
+    }
+    .login-blob { position: absolute; border-radius: 999px; filter: blur(1px); opacity: .75; }
+    .login-layout {
+      width: min(1040px, 100%);
+      min-height: 620px;
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      background: #fff;
+      border: 1px solid rgba(226, 222, 247, .9);
+      border-radius: 24px;
+      box-shadow: 0 24px 70px rgba(90, 77, 157, .14);
+    }
+    .login-form-panel { padding: 3.75rem clamp(2rem, 6vw, 5rem); display: flex; align-items: center; }
+    .login-promo {
+      position: relative;
+      overflow: hidden;
+      padding: 3rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      color: #fff;
+      background: linear-gradient(150deg, #7969e9 0%, #6050d0 100%);
+    }
+    .login-promo::before, .login-promo::after {
+      content: ""; position: absolute; border-radius: 999px; background: rgba(255,255,255,.1);
+    }
+    .login-promo::before { width: 330px; height: 330px; top: -150px; right: -110px; }
+    .login-promo::after { width: 250px; height: 250px; bottom: -140px; left: -100px; }
+    .promo-art { position: relative; z-index: 1; width: min(100%, 390px); }
+    .promo-window {
+      margin: 2rem auto 0; max-width: 330px; padding: 12px; border-radius: 14px;
+      background: rgba(255,255,255,.96); box-shadow: 0 18px 35px rgba(43, 31, 126, .25);
+      transform: rotate(-3deg);
+    }
+    .promo-window-bar { display: flex; gap: 4px; margin-bottom: 10px; }
+    .promo-window-bar i { width: 6px; height: 6px; border-radius: 99px; background: #dcd8fa; }
+    .promo-window-body { display: grid; grid-template-columns: 45px 1fr; gap: 9px; min-height: 135px; }
+    .promo-mini-side { border-radius: 7px; background: #f0eeff; }
+    .promo-mini-content { position: relative; border-radius: 8px; background: #fafaff; padding: 10px; }
+    .promo-mini-content::before { content: ""; display: block; height: 38px; border-radius: 6px; background: linear-gradient(135deg,#d9d2ff,#8e80ee); margin-bottom: 9px; }
+    .promo-mini-content::after { content: ""; display: block; width: 62%; height: 7px; border-radius: 9px; background: #e7e4f8; box-shadow: 0 14px #eeeefa, 0 28px #eeeefa; }
+    @media (max-width: 640px) {
+      .login-layout { grid-template-columns: 1fr; min-height: auto; }
+      .login-promo { min-height: 300px; padding: 2rem 1.5rem; }
+      .login-form-panel { padding: 2.5rem 1.5rem; }
+    }
+    video, canvas { max-width: 100%; border-radius: 0.75rem; }
+    @media (max-width: 768px) {
+      #app-view > div { display: block; }
+      #sidebar { min-height: auto; width: 100%; display: flex; overflow-x: auto; gap: .35rem; }
+      #sidebar button { min-width: max-content; }
+      #main-content { padding: 1rem; }
+    }
+  </style>
+</head>
+<body class="bg-slate-100 min-h-screen">
+  <!-- Login -->
+  <div id="login-view" class="min-h-screen flex items-center justify-center p-5 relative overflow-hidden pastel-shell">
+    <div class="login-blob w-72 h-72 bg-purple-200 -top-24 -left-20"></div>
+    <div class="login-blob w-80 h-80 bg-pink-100 -bottom-32 -right-20"></div>
+    <div class="login-layout relative z-10">
+      <div class="login-form-panel">
+        <div class="w-full max-w-sm mx-auto">
+          <div class="flex items-center gap-2 mb-10"><span class="brand-mark" aria-label="Face Attendance"></span><span class="font-bold">Face Attendance</span></div>
+          <h1 class="text-3xl font-bold mb-2">Chào mừng trở lại</h1>
+          <p class="text-sm text-slate-400 mb-8">Đăng nhập để quản lý điểm danh thông minh</p>
+          <form id="login-form" class="space-y-4">
+            <div>
+              <label class="block text-xs font-semibold text-slate-500 mb-1.5">Tên đăng nhập</label>
+              <input type="text" id="username" class="w-full border px-3 py-2.5" placeholder="Nhập tên đăng nhập" required />
+            </div>
+            <div>
+              <div class="flex justify-between items-center mb-1.5">
+                <label class="block text-xs font-semibold text-slate-500">Mật khẩu</label>
+                <span class="text-xs text-[#7767e8]">Bảo mật</span>
+              </div>
+              <input type="password" id="password" class="w-full border px-3 py-2.5" placeholder="Nhập mật khẩu" required />
+            </div>
+            <button type="submit" class="w-full btn-primary text-white py-2.5 rounded-lg hover:bg-indigo-700">Đăng nhập</button>
+          </form>
+          <p id="login-error" class="text-red-600 text-sm mt-3 hidden"></p>
+          <p class="text-xs text-slate-400 mt-5 text-center">Mặc định: admin / admin123</p>
+        </div>
+      </div>
+      <div class="login-promo">
+        <div class="promo-art">
+          <div class="text-xs font-semibold tracking-[.18em] uppercase text-white/70 mb-5">SMART CLASSROOM</div>
+          <h2 class="text-3xl font-bold leading-tight">Điểm danh dễ dàng<br />mỗi ngày</h2>
+          <p class="text-sm text-white/75 mt-4 max-w-xs mx-auto">Quản lý lớp học, nhận diện khuôn mặt và theo dõi chuyên cần trong một nơi.</p>
+          <div class="promo-window" aria-hidden="true">
+            <div class="promo-window-bar"><i></i><i></i><i></i></div>
+            <div class="promo-window-body"><div class="promo-mini-side"></div><div class="promo-mini-content"></div></div>
+          </div>
+          <div class="flex justify-center gap-1.5 mt-7"><i class="w-5 h-1.5 rounded-full bg-white"></i><i class="w-1.5 h-1.5 rounded-full bg-white/40"></i><i class="w-1.5 h-1.5 rounded-full bg-white/40"></i></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- App Shell -->
+  <div id="app-view" class="hidden">
+    <nav class="pastel-topbar px-6 py-4 flex justify-between items-center">
+      <div class="flex items-center gap-2.5">
+        <span class="brand-mark" aria-label="Face Attendance"></span>
+        <div><div class="font-bold tracking-tight">Face Attendance</div><div class="text-[10px] text-slate-400">SMART CLASSROOM</div></div>
+      </div>
+      <div class="flex items-center gap-3">
+        <span id="user-info" class="text-sm text-slate-500 hidden sm:inline"></span>
+        <button onclick="logout()" class="bg-[#f1efff] text-[#6b5fca] px-3 py-2 rounded-lg hover:bg-[#e7e3ff] text-sm font-semibold">Đăng xuất</button>
+      </div>
+    </nav>
+    <div class="flex pastel-shell">
+      <aside class="w-60 bg-white/70 min-h-[calc(100vh-73px)] border-r border-[#ebe8f8] p-4 space-y-1" id="sidebar"></aside>
+      <main class="flex-1 p-6 lg:p-8 max-w-[1500px]" id="main-content"></main>
+    </div>
+  </div>
+
+  <!-- Modal xem ảnh khuôn mặt người dùng -->
+  <div id="user-faces-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl p-6 relative max-h-[90vh] overflow-y-auto">
+      <button onclick="closeUserFacesModal()" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 font-bold text-xl">&times;</button>
+      <h3 id="modal-title" class="text-lg font-bold mb-4 text-gray-800">Ảnh khuôn mặt</h3>
+      <div id="modal-faces-content" class="grid grid-cols-2 sm:grid-cols-3 gap-4"></div>
+    </div>
+  </div>
+
+  <script>
+    // ===== API base: cùng origin nếu mở qua :8000, không thì host:8000 =====
+    function getDefaultAPI() {
+      const saved = localStorage.getItem('API_BASE');
+      if (saved) return saved.replace(/\/$/, '');
+      if (window.location.port === '8000' || window.location.protocol === 'file:') {
+        if (window.location.protocol !== 'file:') {
+          return window.location.origin; // http://127.0.0.1:8000
+        }
+      }
+      const host = window.location.hostname || '127.0.0.1';
+      return `http://${host}:8000`;
+    }
+    let API = getDefaultAPI();
+
+    let token = localStorage.getItem('token');
+    let user = JSON.parse(localStorage.getItem('user') || 'null');
+
+    // Camera state (student face upload)
+    let cameraStream = null;
+    let capturedBlob = null;
+
+    async function api(path, opts = {}) {
+      const headers = opts.headers || {};
+      if (token) headers['Authorization'] = 'Bearer ' + token;
+      if (!(opts.body instanceof FormData)) headers['Content-Type'] = 'application/json';
+      const res = await fetch(API + path, { ...opts, headers });
+      if (res.status === 401) { logout(); throw new Error('Unauthorized'); }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || (typeof data.detail === 'string' ? data.detail : res.statusText));
+      return data;
+    }
+
+    function faceImgUrl(imagePath) {
+      if (!imagePath) return '';
+      let p = String(imagePath).replace(/\\/g, '/');
+      p = p.replace(/^\/?uploads\//, '');
+      return `${API}/uploads/${p}`;
+    }
+
+    function logout() {
+      stopCamera();
+      token = null; user = null;
+      localStorage.removeItem('token'); localStorage.removeItem('user');
+      document.getElementById('login-view').classList.remove('hidden');
+      document.getElementById('app-view').classList.add('hidden');
+    }
+
+    document.getElementById('login-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const err = document.getElementById('login-error');
+      err.classList.add('hidden');
+
+      API = getDefaultAPI();
+
+      const body = new URLSearchParams();
+      body.append('username', document.getElementById('username').value);
+      body.append('password', document.getElementById('password').value);
+      try {
+        const res = await fetch(API + '/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Đăng nhập thất bại');
+        token = data.access_token;
+        user = { role: data.role, full_name: data.full_name, user_id: data.user_id };
+        localStorage.setItem('token', token);
+        localStorage.setItem('user', JSON.stringify(user));
+        showApp();
+      } catch (ex) {
+        err.textContent = ex.message;
+        err.classList.remove('hidden');
+      }
+    };
+
+    function showApp() {
+      document.getElementById('login-view').classList.add('hidden');
+      document.getElementById('app-view').classList.remove('hidden');
+      document.getElementById('user-info').textContent = `${user.full_name} (${user.role})`;
+      buildSidebar();
+      if (user.role === 'admin') renderDashboard();
+      else if (user.role === 'lecturer') renderLecturerDashboard();
+      else renderStudentDashboard();
+    }
+
+    function buildSidebar() {
+      const s = document.getElementById('sidebar');
+      let items = [];
+      if (user.role === 'admin') {
+        items = [
+          ['Dashboard', renderDashboard],
+          ['Người dùng', renderUsers],
+          ['Học phần', renderCourses],
+          ['Lớp học', renderClasses],
+          ['Phê duyệt khuôn mặt', renderFaceReview],
+          ['Log giả mạo', renderSpoofLogs],
+        ];
+      } else if (user.role === 'lecturer') {
+        items = [
+          ['Dashboard', renderLecturerDashboard],
+          ['Lớp của tôi', renderMyClasses],
+          ['Điểm danh', renderAttendance],
+        ];
+      } else {
+        items = [
+          ['Dashboard', renderStudentDashboard],
+          ['Cập nhật khuôn mặt', renderFaceUpload],
+          ['Lịch sử điểm danh', renderMyAttendance],
+        ];
+      }
+      s.innerHTML = items.map(([label, fn], i) =>
+        `<button class="sidebar-link w-full text-left px-3 py-2 ${i===0?'active':''}" onclick="document.querySelectorAll('#sidebar button').forEach(b=>b.classList.remove('active'));this.classList.add('active');(${fn.name})()">${label}</button>`
+      ).join('');
+    }
+
+    // ---------- ADMIN ----------
+    async function renderDashboard() {
+      document.getElementById('main-content').innerHTML = `
+        <div class="dashboard-hero mb-6">
+          <div class="relative z-10">
+            <div class="text-sm text-white/75 mb-1">Tổng quan hệ thống</div>
+            <h2 class="!text-white !text-2xl !mb-0">Xin chào, ${user.full_name || 'Quản trị viên'} 👋</h2>
+            <p class="text-sm text-white/75 mt-2">Theo dõi hoạt động điểm danh và quản lý lớp học của bạn.</p>
+          </div>
+        </div>
+        <div class="section-label mb-3">Thống kê nhanh</div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4" id="stats"></div>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-5">
+          <div class="card">
+            <div class="flex items-center justify-between mb-4"><h3 class="font-bold">Truy cập nhanh</h3><span class="text-xs text-[#a09ab7]">Quản lý</span></div>
+            <div class="grid grid-cols-2 gap-3">
+              <button onclick="renderUsers()" class="text-left p-3 rounded-xl bg-[#f5f2ff] hover:bg-[#ece8ff]"><div class="text-xl mb-1">👥</div><div class="text-sm font-semibold">Người dùng</div><div class="text-xs text-slate-400 mt-1">Quản lý tài khoản</div></button>
+              <button onclick="renderClasses()" class="text-left p-3 rounded-xl bg-[#fff5ee] hover:bg-[#ffede0]"><div class="text-xl mb-1">📚</div><div class="text-sm font-semibold">Lớp học</div><div class="text-xs text-slate-400 mt-1">Tổ chức lớp học</div></button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="flex items-center justify-between mb-4"><h3 class="font-bold">Trạng thái hệ thống</h3><span class="text-xs text-emerald-500 font-semibold">● Đang hoạt động</span></div>
+            <div class="space-y-3 text-sm">
+              <div class="flex justify-between p-3 rounded-xl bg-[#f8f7fc]"><span class="text-slate-500">Nhận diện khuôn mặt</span><span class="font-semibold text-[#7767e8]">Sẵn sàng</span></div>
+              <div class="flex justify-between p-3 rounded-xl bg-[#f8f7fc]"><span class="text-slate-500">Đồng bộ phòng học</span><span class="font-semibold text-emerald-500">Đã kết nối</span></div>
+            </div>
+          </div>
+        </div>`;
+      try {
+        const users = await api('/api/users');
+        const courses = await api('/api/courses');
+        const classes = await api('/api/classes');
+        document.getElementById('stats').innerHTML = `
+          <div class="card stat-card"><div class="stat-icon bg-[#eeeaff] text-[#7767e8]">👥</div><div class="text-3xl font-bold text-[#50449e]">${users.length}</div><div class="text-sm text-slate-400 mt-1">Người dùng</div><div class="stat-watermark">👥</div></div>
+          <div class="card stat-card"><div class="stat-icon bg-[#fff0e4] text-[#e89a62]">📖</div><div class="text-3xl font-bold text-[#b87543]">${courses.length}</div><div class="text-sm text-slate-400 mt-1">Học phần</div><div class="stat-watermark">📖</div></div>
+          <div class="card stat-card"><div class="stat-icon bg-[#e8f8f1] text-[#43af84]">⌂</div><div class="text-3xl font-bold text-[#318a67]">${classes.length}</div><div class="text-sm text-slate-400 mt-1">Lớp học</div><div class="stat-watermark">⌂</div></div>`;
+      } catch (e) { alert(e.message); }
+    }
+
+    async function renderUsers() {
+      const main = document.getElementById('main-content');
+      main.innerHTML = `<h2 class="text-xl font-bold mb-4">Quản lý người dùng</h2>
+        <button onclick="showCreateUser()" class="mb-4 bg-indigo-600 text-white px-4 py-2 rounded">+ Thêm người dùng</button>
+        <div id="user-list" class="card overflow-x-auto"></div>
+        <div id="user-form" class="hidden card mt-4"></div>`;
+      const users = await api('/api/users?include_inactive=true');
+      document.getElementById('user-list').innerHTML = `
+        <table class="w-full text-sm"><thead><tr class="border-b text-left">
+          <th class="py-2">ID</th><th>Username</th><th>Họ tên</th><th>Email</th><th>Role</th><th>MSSV</th><th>Trạng thái</th><th>Thao tác</th>
+        </tr></thead><tbody>
+        ${users.map(u => `<tr class="border-b ${u.is_active ? '' : 'bg-gray-50 text-gray-400'}">
+          <td class="py-2">${u.id}</td>
+          <td>${u.username}</td>
+          <td>${u.full_name}</td>
+          <td class="text-xs">${u.email || ''}</td>
+          <td><span class="px-2 py-0.5 rounded text-xs ${u.role==='admin'?'bg-red-100':u.role==='lecturer'?'bg-blue-100':'bg-green-100'}">${u.role}</span></td>
+          <td>${u.student_id||''}</td>
+          <td>${u.is_active ? '<span class="text-green-600 text-xs">Hoạt động</span>' : '<span class="text-red-500 text-xs">Đã ẩn</span>'}</td>
+          <td class="space-x-2 whitespace-nowrap">
+            <button onclick='viewUserFaces(${u.id}, "${u.full_name.replace(/"/g, '&quot;')}")' class="text-purple-600 hover:underline font-medium text-xs">Xem ảnh</button>
+            <button onclick='showEditUser(${JSON.stringify(u).replace(/'/g, "&#39;")})' class="text-indigo-600 hover:underline text-xs">Sửa</button>
+            ${u.is_active
+              ? `<button onclick="deactivateUser(${u.id})" class="text-red-600 hover:underline text-xs">Vô hiệu</button>`
+              : `<button onclick="restoreUser(${u.id})" class="text-green-600 hover:underline text-xs">Khôi phục</button>`}
+          </td>
+        </tr>`).join('')}
+        </tbody></table>`;
+    }
+
+    // Modal hiển thị danh sách ảnh của user
+    async function viewUserFaces(userId, userName) {
+      const modal = document.getElementById('user-faces-modal');
+      const title = document.getElementById('modal-title');
+      const content = document.getElementById('modal-faces-content');
+      
+      title.textContent = `Danh sách ảnh của: ${userName} (ID: ${userId})`;
+      content.innerHTML = '<div class="col-span-full text-center py-4 text-gray-500">Đang tải dữ liệu...</div>';
+      modal.classList.remove('hidden');
+
+      try {
+        const faces = await api(`/api/face/user/${userId}`);
+        if (!faces || !faces.length) {
+          content.innerHTML = '<div class="col-span-full text-center py-4 text-gray-500">Người dùng này chưa có ảnh khuôn mặt nào.</div>';
+          return;
+        }
+
+        content.innerHTML = faces.map(f => `
+          <div class="border rounded-lg p-2 bg-gray-50 flex flex-col items-center gap-2">
+            <img src="${faceImgUrl(f.image_path)}" class="w-full h-36 object-cover rounded bg-gray-200 border"
+                 onerror="this.onerror=null;this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2296%22 height=%2296%22><rect fill=%22%23e5e7eb%22 width=%2296%22 height=%2296%22/><text x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22%239ca3af%22 font-size=%2212%22>No image</text></svg>'" />
+            <div class="text-xs flex items-center justify-between w-full px-1">
+              <span class="text-gray-500">#${f.id}</span>
+              <span class="px-2 py-0.5 rounded ${f.status === 'approved' ? 'bg-green-100 text-green-700' : f.status === 'rejected' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}">${f.status}</span>
+              <button onclick="deleteUserFace(${f.id}, ${userId}, '${userName.replace(/'/g, "\\'")}')" class="bg-red-600 text-white px-2 py-1 rounded text-xs hover:bg-red-700">Xóa</button>
+            </div>
+          </div>
+        `).join('');
+      } catch (e) {
+        content.innerHTML = `<div class="col-span-full text-center py-4 text-red-500">Lỗi: ${e.message}</div>`;
+      }
+    }
+
+    async function deleteUserFace(faceId, userId, userName) {
+      if (!confirm('Bạn có chắc chắn muốn xóa ảnh khuôn mặt này?')) return;
+      try {
+        await api(`/api/face/${faceId}`, { method: 'DELETE' });
+        alert('Đã xóa ảnh thành công');
+        viewUserFaces(userId, userName);
+      } catch (e) {
+        alert('Lỗi khi xóa ảnh: ' + e.message);
+      }
+    }
+
+    function closeUserFacesModal() {
+      document.getElementById('user-faces-modal').classList.add('hidden');
+    }
+
+    function showCreateUser() {
+      document.getElementById('user-form').classList.remove('hidden');
+      document.getElementById('user-form').innerHTML = `
+        <h3 class="font-semibold mb-3">Thêm người dùng</h3>
+        <div class="grid grid-cols-2 gap-3">
+          <input id="nu-username" placeholder="Username" class="border rounded px-3 py-2" />
+          <input id="nu-email" placeholder="Email" class="border rounded px-3 py-2" />
+          <input id="nu-fullname" placeholder="Họ tên" class="border rounded px-3 py-2" />
+          <input id="nu-password" type="password" placeholder="Mật khẩu" class="border rounded px-3 py-2" />
+          <select id="nu-role" class="border rounded px-3 py-2">
+            <option value="student">Sinh viên</option>
+            <option value="lecturer">Giảng viên</option>
+            <option value="admin">Admin</option>
+          </select>
+          <input id="nu-studentid" placeholder="MSSV (sv)" class="border rounded px-3 py-2" />
+          <input id="nu-phone" placeholder="SĐT" class="border rounded px-3 py-2" />
+        </div>
+        <div class="mt-3 flex gap-2">
+          <button onclick="createUser()" class="bg-indigo-600 text-white px-4 py-2 rounded">Lưu</button>
+          <button onclick="document.getElementById('user-form').classList.add('hidden')" class="bg-gray-200 px-4 py-2 rounded">Hủy</button>
+        </div>`;
+    }
+
+    function showEditUser(u) {
+      document.getElementById('user-form').classList.remove('hidden');
+      document.getElementById('user-form').innerHTML = `
+        <h3 class="font-semibold mb-3">Sửa người dùng #${u.id} — ${u.username}</h3>
+        <div class="grid grid-cols-2 gap-3">
+          <input id="eu-email" value="${u.email || ''}" placeholder="Email" class="border rounded px-3 py-2" />
+          <input id="eu-fullname" value="${u.full_name || ''}" placeholder="Họ tên" class="border rounded px-3 py-2" />
+          <input id="eu-studentid" value="${u.student_id || ''}" placeholder="MSSV" class="border rounded px-3 py-2" />
+          <input id="eu-phone" value="${u.phone || ''}" placeholder="SĐT" class="border rounded px-3 py-2" />
+          <input id="eu-password" type="password" placeholder="Mật khẩu mới (để trống nếu không đổi)" class="border rounded px-3 py-2" />
+          <select id="eu-role" class="border rounded px-3 py-2">
+            <option value="student" ${u.role==='student'?'selected':''}>Sinh viên</option>
+            <option value="lecturer" ${u.role==='lecturer'?'selected':''}>Giảng viên</option>
+            <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
+          </select>
+        </div>
+        <div class="mt-3 flex gap-2">
+          <button onclick="saveUser(${u.id})" class="bg-indigo-600 text-white px-4 py-2 rounded">Cập nhật</button>
+          <button onclick="document.getElementById('user-form').classList.add('hidden')" class="bg-gray-200 px-4 py-2 rounded">Hủy</button>
+        </div>`;
+    }
+
+    async function createUser() {
+      try {
+        await api('/api/users', {
+          method: 'POST',
+          body: JSON.stringify({
+            username: document.getElementById('nu-username').value,
+            email: document.getElementById('nu-email').value,
+            full_name: document.getElementById('nu-fullname').value,
+            password: document.getElementById('nu-password').value,
+            role: document.getElementById('nu-role').value,
+            student_id: document.getElementById('nu-studentid').value || null,
+            phone: document.getElementById('nu-phone')?.value || null,
+          }),
+        });
+        renderUsers();
+      } catch (e) { alert(e.message); }
+    }
+
+    async function saveUser(id) {
+      try {
+        const body = {
+          email: document.getElementById('eu-email').value,
+          full_name: document.getElementById('eu-fullname').value,
+          student_id: document.getElementById('eu-studentid').value || null,
+          phone: document.getElementById('eu-phone').value || null,
+          role: document.getElementById('eu-role').value,
+        };
+        const pw = document.getElementById('eu-password').value;
+        if (pw) body.password = pw;
+        await api('/api/users/' + id, { method: 'PUT', body: JSON.stringify(body) });
+        alert('Đã cập nhật');
+        renderUsers();
+      } catch (e) { alert(e.message); }
+    }
+
+    async function deactivateUser(id) {
+      if (!confirm('Vô hiệu hóa tài khoản này? Dữ liệu vẫn được giữ, chỉ không đăng nhập/sử dụng được.')) return;
+      try {
+        await api('/api/users/' + id, { method: 'DELETE' });
+        alert('Đã vô hiệu hóa tài khoản');
+        renderUsers();
+      } catch (e) { alert(e.message); }
+    }
+
+    async function restoreUser(id) {
+      try {
+        await api('/api/users/' + id + '/restore', { method: 'POST' });
+        alert('Đã khôi phục tài khoản');
+        renderUsers();
+      } catch (e) { alert(e.message); }
+    }
+
+    async function renderCourses() {
+      const main = document.getElementById('main-content');
+      main.innerHTML = `<h2 class="text-xl font-bold mb-4">Quản lý học phần</h2>
+        <div class="card mb-4 flex gap-2 flex-wrap">
+          <input id="c-code" placeholder="Mã HP" class="border rounded px-3 py-2" />
+          <input id="c-name" placeholder="Tên học phần" class="border rounded px-3 py-2" />
+          <input id="c-credits" type="number" value="3" class="border rounded px-3 py-2 w-20" />
+          <button onclick="createCourse()" class="bg-indigo-600 text-white px-4 py-2 rounded">Thêm</button>
+        </div>
+        <div id="course-list" class="card"></div>`;
+      const courses = await api('/api/courses');
+      document.getElementById('course-list').innerHTML = `<table class="w-full text-sm"><thead><tr class="border-b text-left">
+        <th class="py-2">ID</th><th>Mã</th><th>Tên</th><th>Tín chỉ</th><th></th></tr></thead><tbody>
+        ${courses.map(c => `<tr class="border-b"><td class="py-2">${c.id}</td><td>${c.code}</td><td>${c.name}</td><td>${c.credits}</td>
+          <td><button onclick="deleteCourse(${c.id})" class="text-red-600 text-xs">Xóa</button></td></tr>`).join('')}
+        </tbody></table>`;
+    }
+
+    async function createCourse() {
+      await api('/api/courses', {
+        method: 'POST',
+        body: JSON.stringify({
+          code: document.getElementById('c-code').value,
+          name: document.getElementById('c-name').value,
+          credits: +document.getElementById('c-credits').value,
+        }),
+      });
+      renderCourses();
+    }
+
+    async function deleteCourse(id) {
+      if (!confirm('Xóa?')) return;
+      await api('/api/courses/' + id, { method: 'DELETE' });
+      renderCourses();
+    }
+
+    async function renderClasses() {
+      const main = document.getElementById('main-content');
+      main.innerHTML = `<h2 class="text-xl font-bold mb-4">Quản lý lớp học</h2>
+        <div class="card mb-4 grid grid-cols-2 md:grid-cols-5 gap-2">
+          <input id="cl-name" placeholder="Tên lớp (VD: CS101-01)" class="border rounded px-3 py-2" />
+          <select id="cl-course" class="border rounded px-3 py-2"><option value="">-- Chọn học phần --</option></select>
+          <select id="cl-lecturer" class="border rounded px-3 py-2"><option value="">-- Chọn giảng viên --</option></select>
+          <input id="cl-room" placeholder="Phòng (VD: A101)" class="border rounded px-3 py-2" />
+          <button onclick="createClass()" class="bg-indigo-600 text-white px-4 py-2 rounded">Tạo lớp</button>
+        </div>
+        <div id="class-list" class="card"></div>`;
+
+      const [courses, users, classes] = await Promise.all([
+        api('/api/courses'),
+        api('/api/users'),
+        api('/api/classes'),
+      ]);
+      const lecturers = users.filter(u => u.role === 'lecturer');
+      document.getElementById('cl-course').innerHTML =
+        '<option value="">-- Chọn học phần --</option>' +
+        courses.map(c => `<option value="${c.id}">${c.code} - ${c.name}</option>`).join('');
+      document.getElementById('cl-lecturer').innerHTML =
+        '<option value="">-- Chọn giảng viên --</option>' +
+        lecturers.map(u => `<option value="${u.id}">${u.full_name} (${u.username})</option>`).join('');
+
+      document.getElementById('class-list').innerHTML = `<table class="w-full text-sm"><thead><tr class="border-b text-left">
+        <th class="py-2">ID</th><th>Tên</th><th>Học phần</th><th>Phòng</th><th>GV</th></tr></thead><tbody>
+        ${classes.map(c => {
+          const course = courses.find(x => x.id === c.course_id);
+          const lec = users.find(x => x.id === c.lecturer_id);
+          return `<tr class="border-b"><td class="py-2">${c.id}</td><td>${c.name}</td>
+            <td>${course ? course.code : c.course_id}</td><td>${c.room||''}</td>
+            <td>${lec ? lec.full_name : (c.lecturer_id||'')}</td></tr>`;
+        }).join('')}
+        </tbody></table>`;
+    }
+
+    async function createClass() {
+      const course_id = +document.getElementById('cl-course').value;
+      const lecturer_id = document.getElementById('cl-lecturer').value
+        ? +document.getElementById('cl-lecturer').value : null;
+      if (!course_id) return alert('Vui lòng chọn học phần');
+      try {
+        await api('/api/classes', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: document.getElementById('cl-name').value,
+            course_id,
+            lecturer_id,
+            room: document.getElementById('cl-room').value || null,
+          }),
+        });
+        renderClasses();
+      } catch (e) { alert(e.message); }
+    }
+
+    async function renderFaceReview() {
+      const main = document.getElementById('main-content');
+      main.innerHTML = `<h2 class="text-xl font-bold mb-4">Phê duyệt dữ liệu khuôn mặt</h2><div id="face-list" class="space-y-3"></div>`;
+      const pending = await api('/api/face/pending');
+      if (!pending.length) {
+        document.getElementById('face-list').innerHTML = '<p class="text-gray-500">Không có yêu cầu chờ duyệt.</p>';
+        return;
+      }
+      document.getElementById('face-list').innerHTML = pending.map(f => {
+        const src = faceImgUrl(f.image_path);
+        return `
+        <div class="card flex gap-4 items-center">
+          <img src="${src}" class="w-28 h-28 object-cover rounded border bg-gray-100"
+               onerror="this.onerror=null;this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2296%22 height=%2296%22><rect fill=%22%23e5e7eb%22 width=%2296%22 height=%2296%22/><text x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22%239ca3af%22 font-size=%2212%22>No image</text></svg>'" />
+          <div class="flex-1">
+            <div class="font-medium">User ID: ${f.user_id}${f.user ? ' — ' + f.user.full_name : ''}</div>
+            <div class="text-sm text-gray-500">Gửi lúc: ${f.submitted_at || ''}</div>
+            <div class="text-xs text-gray-400 break-all">${f.image_path || ''}</div>
+          </div>
+          <button onclick="reviewFace(${f.id},'approved')" class="bg-green-600 text-white px-3 py-1 rounded">Duyệt</button>
+          <button onclick="reviewFace(${f.id},'rejected')" class="bg-red-600 text-white px-3 py-1 rounded">Từ chối</button>
+        </div>`;
+      }).join('');
+    }
+
+    async function reviewFace(id, status) {
+      await api('/api/face/' + id + '/review', {
+        method: 'POST',
+        body: JSON.stringify({ status }),
+      });
+      renderFaceReview();
+    }
+
+    async function renderSpoofLogs() {
+      const main = document.getElementById('main-content');
+      main.innerHTML = `<h2 class="text-xl font-bold mb-4">Log ảnh giả mạo</h2><div id="spoof-list" class="space-y-2"></div>`;
+      const logs = await api('/api/spoof-logs');
+      document.getElementById('spoof-list').innerHTML = logs.length ? logs.map(l => `
+        <div class="card flex gap-3 text-sm">
+          <img src="${faceImgUrl(l.image_path)}" class="w-16 h-16 object-cover rounded" onerror="this.style.display='none'" />
+          <div>
+            <div>Phòng: ${l.room || '-'} | Session: ${l.session_id || '-'}</div>
+            <div class="text-gray-500">${l.detected_at} — ${l.note || ''}</div>
+          </div>
+        </div>`).join('') : '<p class="text-gray-500">Chưa có log.</p>';
+    }
+
+    // ---------- LECTURER ----------
+    async function renderLecturerDashboard() {
+      const main = document.getElementById('main-content');
+      main.innerHTML = `
+        <div class="dashboard-hero mb-6">
+          <div class="relative z-10"><div class="text-sm text-white/75 mb-1">Không gian giảng viên</div>
+          <h2 class="!text-white !text-2xl !mb-0">Xin chào, ${user.full_name || 'Giảng viên'} 👋</h2>
+          <p class="text-sm text-white/75 mt-2">Sẵn sàng bắt đầu một buổi học hiệu quả?</p></div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="card stat-card"><div class="stat-icon bg-[#eeeaff] text-[#7767e8]">📚</div><div id="lecturer-class-count" class="text-3xl font-bold text-[#50449e]">—</div><div class="text-sm text-slate-400 mt-1">Lớp đang phụ trách</div></div>
+          <div class="card stat-card"><div class="stat-icon bg-[#e8f8f1] text-[#43af84]">✓</div><div class="text-3xl font-bold text-[#318a67]">Sẵn sàng</div><div class="text-sm text-slate-400 mt-1">Trạng thái điểm danh</div></div>
+        </div>
+        <div class="card mt-5"><h3 class="font-bold mb-2">Bắt đầu nhanh</h3><p class="text-sm text-slate-400 mb-4">Chọn một tác vụ để tiếp tục quản lý lớp học.</p>
+          <div class="flex flex-wrap gap-3"><button onclick="renderMyClasses()" class="btn-primary text-white px-4 py-2">Xem lớp của tôi</button><button onclick="renderAttendance()" class="bg-[#f1efff] text-[#6b5fca] px-4 py-2">Mở điểm danh</button></div>
+        </div>`;
+      try {
+        const classes = await api('/api/classes');
+        const count = document.getElementById('lecturer-class-count');
+        if (count) count.textContent = classes.length;
+      } catch (e) { console.error(e); }
+    }
+
+    async function renderMyClasses() {
+      const main = document.getElementById('main-content');
+      main.innerHTML = `<h2 class="text-xl font-bold mb-4">Lớp của tôi</h2><div id="my-classes" class="card"></div>`;
+      const classes = await api('/api/classes');
+      document.getElementById('my-classes').innerHTML = classes.map(c => `
+        <div class="border-b py-3 flex justify-between items-center">
+          <div><span class="font-medium">${c.name}</span> — Phòng: ${c.room || 'N/A'} <span class="text-xs text-gray-400">(ID: ${c.id})</span></div>
+          <button onclick="showEnroll(${c.id})" class="text-indigo-600 text-sm">Thêm SV</button>
+        </div>`).join('') || '<p class="text-gray-500">Chưa có lớp.</p>';
+    }
+
+    async function showEnroll(classId) {
+      const students = await api('/api/users?role=student');
+      if (!students.length) return alert('Chưa có sinh viên nào trong hệ thống');
+
+      const main = document.getElementById('main-content');
+      const box = document.createElement('div');
+      box.className = 'card mt-4';
+      box.id = 'enroll-box';
+      box.innerHTML = `
+        <h3 class="font-semibold mb-2">Thêm sinh viên vào lớp #${classId}</h3>
+        <select id="enroll-student" class="border rounded px-3 py-2 w-full max-w-md mb-2">
+          ${students.map(s => `<option value="${s.id}">${s.full_name} — ${s.student_id || s.username} (ID: ${s.id})</option>`).join('')}
+        </select>
+        <div class="flex gap-2">
+          <button onclick="doEnroll(${classId})" class="bg-indigo-600 text-white px-4 py-2 rounded">Thêm</button>
+          <button onclick="document.getElementById('enroll-box')?.remove()" class="bg-gray-200 px-4 py-2 rounded">Đóng</button>
+        </div>`;
+      const old = document.getElementById('enroll-box');
+      if (old) old.remove();
+      main.appendChild(box);
+    }
+
+    async function doEnroll(classId) {
+      const sid = +document.getElementById('enroll-student').value;
+      try {
+        await api('/api/enrollments', { method: 'POST', body: JSON.stringify({ student_id: sid, class_id: classId }) });
+        alert('Đã thêm sinh viên vào lớp');
+        document.getElementById('enroll-box')?.remove();
+      } catch (e) { alert(e.message); }
+    }
+
+    async function renderAttendance() {
+      const main = document.getElementById('main-content');
+      main.innerHTML = `<h2 class="text-xl font-bold mb-4">Điểm danh</h2>
+        <div class="card mb-4">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+            <div>
+              <label class="block text-sm mb-1">Chọn lớp</label>
+              <select id="att-class" class="border rounded px-3 py-2 w-full">
+                <option value="">-- Đang tải lớp --</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm mb-1">Phòng (đồng bộ desktop)</label>
+              <input id="att-room" class="border rounded px-3 py-2 w-full" placeholder="A101" />
+            </div>
+            <div>
+              <button onclick="startSession()" class="bg-green-600 text-white px-4 py-2 rounded w-full">Mở buổi điểm danh</button>
+            </div>
+          </div>
+        </div>
+        <div id="session-list" class="card"></div>`;
+
+      const classes = await api('/api/classes');
+      const sel = document.getElementById('att-class');
+      sel.innerHTML = '<option value="">-- Chọn lớp --</option>' +
+        classes.map(c => `<option value="${c.id}" data-room="${c.room || ''}">${c.name} ${c.room ? '('+c.room+')' : ''}</option>`).join('');
+
+      sel.onchange = () => {
+        const opt = sel.selectedOptions[0];
+        if (opt && opt.dataset.room) {
+          document.getElementById('att-room').value = opt.dataset.room;
+        }
+      };
+
+      const sessions = await api('/api/sessions');
+      document.getElementById('session-list').innerHTML = `<table class="w-full text-sm"><thead><tr class="border-b text-left">
+        <th class="py-2">ID</th><th>Lớp</th><th>Phòng</th><th>Ngày</th><th>Trạng thái</th><th></th></tr></thead><tbody>
+        ${sessions.map(s => {
+          const cls = classes.find(c => c.id === s.class_id);
+          return `<tr class="border-b">
+          <td class="py-2">${s.id}</td><td>${cls ? cls.name : s.class_id}</td><td>${s.room||''}</td>
+          <td>${s.session_date}</td>
+          <td>${s.is_open ? '<span class="text-green-600">Đang mở</span>' : 'Đã đóng'}</td>
+          <td>${s.is_open ? `<button onclick="closeSession(${s.id})" class="text-red-600 text-xs">Đóng</button>` : ''}
+            <button onclick="viewRecords(${s.id})" class="text-indigo-600 text-xs ml-2">Xem</button></td>
+        </tr>`;
+        }).join('')}
+        </tbody></table>`;
+    }
+
+    async function startSession() {
+      const class_id = +document.getElementById('att-class').value;
+      const room = document.getElementById('att-room').value.trim();
+      if (!class_id) return alert('Vui lòng chọn lớp');
+      if (!room) return alert('Vui lòng nhập mã phòng (vd: A101)');
+      try {
+        await api('/api/sessions', {
+          method: 'POST',
+          body: JSON.stringify({ class_id, session_date: new Date().toISOString(), room }),
+        });
+        alert('Đã mở buổi điểm danh. Dùng desktop app với số phòng: ' + room);
+        renderAttendance();
+      } catch (e) { alert(e.message); }
+    }
+
+    async function closeSession(id) {
+      await api('/api/sessions/' + id + '/close', { method: 'POST' });
+      renderAttendance();
+    }
+
+    async function viewRecords(id) {
+      const records = await api('/api/sessions/' + id + '/records');
+      alert(records.map(r => `SV ${r.student_id}${r.student ? ' ('+r.student.full_name+')' : ''}: ${r.status}`).join('\n') || 'Chưa có bản ghi');
+    }
+
+    // ---------- STUDENT ----------
+    async function renderStudentDashboard() {
+      document.getElementById('main-content').innerHTML = `
+        <div class="dashboard-hero mb-6">
+          <div class="relative z-10"><div class="text-sm text-white/75 mb-1">Cổng thông tin sinh viên</div>
+          <h2 class="!text-white !text-2xl !mb-0">Xin chào, ${user.full_name || 'Sinh viên'} 👋</h2>
+          <p class="text-sm text-white/75 mt-2">Cập nhật hồ sơ và theo dõi chuyên cần của bạn.</p></div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <button onclick="renderFaceUpload()" class="card text-left hover:-translate-y-1 transition-transform"><div class="stat-icon bg-[#eeeaff] text-[#7767e8]">◉</div><h3 class="font-bold">Cập nhật khuôn mặt</h3><p class="text-sm text-slate-400 mt-1">Thêm ảnh để hệ thống nhận diện chính xác hơn.</p><span class="inline-block text-sm text-[#7767e8] font-semibold mt-4">Cập nhật ngay →</span></button>
+          <button onclick="renderMyAttendance()" class="card text-left hover:-translate-y-1 transition-transform"><div class="stat-icon bg-[#e8f8f1] text-[#43af84]">✓</div><h3 class="font-bold">Lịch sử điểm danh</h3><p class="text-sm text-slate-400 mt-1">Xem lại các buổi học và trạng thái điểm danh.</p><span class="inline-block text-sm text-[#43af84] font-semibold mt-4">Xem lịch sử →</span></button>
+        </div>`;
+    }
+
+    function stopCamera() {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(t => t.stop());
+        cameraStream = null;
+      }
+      const v = document.getElementById('cam-video');
+      if (v) v.srcObject = null;
+    }
+
+    async function toggleCamera() {
+      const video = document.getElementById('cam-video');
+      const btn = document.getElementById('btn-camera');
+      if (cameraStream) {
+        stopCamera();
+        btn.textContent = 'Bật camera';
+        btn.classList.remove('bg-red-600');
+        btn.classList.add('bg-slate-700');
+        return;
+      }
+      try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false,
+        });
+        video.srcObject = cameraStream;
+        await video.play();
+        btn.textContent = 'Tắt camera';
+        btn.classList.remove('bg-slate-700');
+        btn.classList.add('bg-red-600');
+      } catch (e) {
+        alert('Không mở được camera: ' + e.message);
+      }
+    }
+
+    function capturePhoto() {
+      const video = document.getElementById('cam-video');
+      if (!cameraStream || !video.videoWidth) {
+        return alert('Hãy bật camera trước');
+      }
+      const canvas = document.getElementById('cam-canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0);
+      canvas.toBlob((blob) => {
+        if (!blob) return alert('Không chụp được ảnh');
+        capturedBlob = blob;
+        const url = URL.createObjectURL(blob);
+        const preview = document.getElementById('capture-preview');
+        preview.src = url;
+        preview.classList.remove('hidden');
+        document.getElementById('capture-actions').classList.remove('hidden');
+      }, 'image/jpeg', 0.92);
+    }
+
+    function clearCapture() {
+      capturedBlob = null;
+      const preview = document.getElementById('capture-preview');
+      if (preview) {
+        preview.src = '';
+        preview.classList.add('hidden');
+      }
+      document.getElementById('capture-actions')?.classList.add('hidden');
+    }
+
+    async function uploadCaptured() {
+      if (!capturedBlob) return alert('Chưa có ảnh chụp');
+      const fd = new FormData();
+      fd.append('file', capturedBlob, 'capture.jpg');
+      try {
+        const res = await fetch(API + '/api/face/upload', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + token },
+          body: fd,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Upload thất bại');
+        alert(data.message || 'Đã gửi');
+        clearCapture();
+        renderFaceUpload();
+      } catch (e) { alert(e.message); }
+    }
+
+    async function uploadMultipleFiles() {
+      const input = document.getElementById('face-files');
+      const files = input?.files;
+      if (!files || !files.length) return alert('Chọn ít nhất 1 ảnh');
+      
+      const statusEl = document.getElementById('multi-status');
+      if (statusEl) statusEl.textContent = 'Đang gửi...';
+      let ok = 0, fail = 0;
+
+      for (let i = 0; i < files.length; i++) {
+        const fd = new FormData();
+        fd.append('file', files[i]);
+        try {
+          const res = await fetch(API + '/api/face/upload', {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + token },
+            body: fd,
+          });
+          if (res.ok) ok++; else fail++;
+        } catch (e) {
+          fail++;
+        }
+      }
+
+      if (statusEl) statusEl.textContent = `Thành công ${ok}/${files.length}` + (fail ? `, thất bại ${fail}` : '');
+      input.value = '';
+      renderFaceUpload();
+    }
+
+    async function renderFaceUpload() {
+      stopCamera();
+      capturedBlob = null;
+      const main = document.getElementById('main-content');
+      main.innerHTML = `
+        <h2 class="text-xl font-bold mb-4">Cập nhật dữ liệu khuôn mặt</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div class="card space-y-4">
+            <h3 class="font-semibold text-gray-800">1. Chụp trực tiếp từ Camera</h3>
+            <div class="relative bg-black rounded-lg overflow-hidden min-h-[240px] flex items-center justify-center">
+              <video id="cam-video" autoplay playsinline class="w-full h-auto object-cover"></video>
+            </div>
+            <div class="flex gap-2">
+              <button id="btn-camera" onclick="toggleCamera()" class="bg-slate-700 text-white px-4 py-2 rounded hover:bg-slate-800 transition">Bật camera</button>
+              <button onclick="capturePhoto()" class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 transition">Chụp ảnh</button>
+            </div>
+            <canvas id="cam-canvas" class="hidden"></canvas>
+            <div id="capture-actions" class="hidden pt-2 border-t space-y-2">
+              <p class="text-sm text-gray-600 font-medium">Ảnh đã chụp:</p>
+              <img id="capture-preview" class="hidden w-32 h-32 object-cover rounded border" />
+              <div class="flex gap-2">
+                <button onclick="uploadCaptured()" class="bg-green-600 text-white px-3 py-1.5 rounded text-sm hover:bg-green-700">Tải lên ảnh này</button>
+                <button onclick="clearCapture()" class="bg-gray-200 text-gray-700 px-3 py-1.5 rounded text-sm hover:bg-gray-300">Xóa</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card space-y-4">
+            <h3 class="font-semibold text-gray-800">2. Tải lên tệp từ máy tính</h3>
+            <div class="space-y-2">
+              <input type="file" id="face-files" multiple accept="image/*" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100" />
+              <button onclick="uploadMultipleFiles()" class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 transition">Gửi các tệp đã chọn</button>
+              <p id="multi-status" class="text-sm font-medium text-gray-600 mt-2"></p>
+            </div>
+          </div>
+        </div>
+
+        <div class="card mt-6">
+          <h3 class="font-semibold text-gray-800 mb-3">Lịch sử ảnh đã tải lên</h3>
+          <div id="my-faces-list" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">Đang tải...</div>
+        </div>`;
+
+      try {
+        const faces = await api('/api/face/my');
+        const listEl = document.getElementById('my-faces-list');
+        if (!faces.length) {
+          listEl.innerHTML = '<p class="text-gray-500 col-span-full">Chưa có dữ liệu khuôn mặt nào.</p>';
+          return;
+        }
+        listEl.innerHTML = faces.map(f => `
+          <div class="border rounded-lg p-2 text-center space-y-2 bg-gray-50">
+            <img src="${faceImgUrl(f.image_path)}" class="w-full h-32 object-cover rounded bg-gray-200" onerror="this.onerror=null;this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2296%22 height=%2296%22/><rect fill=%22%23e5e7eb%22 width=%2296%22 height=%2296%22/><text x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22%239ca3af%22 font-size=%2212%22>No image</text></svg>'" />
+            <div class="text-xs">
+              <span class="px-2 py-0.5 rounded ${f.status === 'approved' ? 'bg-green-100 text-green-700' : f.status === 'rejected' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}">${f.status}</span>
+            </div>
+          </div>
+        `).join('');
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function renderMyAttendance() {
+      const main = document.getElementById('main-content');
+      main.innerHTML = `<h2 class="text-xl font-bold mb-4">Lịch sử điểm danh</h2><div id="my-att-list" class="card">Đang tải...</div>`;
+      try {
+        const records = await api('/api/attendance/my');
+        const container = document.getElementById('my-att-list');
+        if (!records.length) {
+          container.innerHTML = '<p class="text-gray-500">Chưa có dữ liệu điểm danh.</p>';
+          return;
+        }
+        container.innerHTML = `
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b text-left">
+                <th class="py-2">Mã buổi</th>
+                <th>Thời gian</th>
+                <th>Trạng thái</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${records.map(r => `
+                <tr class="border-b">
+                  <td class="py-2">Session #${r.session_id}</td>
+                  <td>${r.timestamp || '-'}</td>
+                  <td><span class="px-2 py-0.5 rounded text-xs ${r.status === 'present' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">${r.status}</span></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>`;
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    // ===== Boot =====
+    if (token && user) {
+      showApp();
+    } else {
+      logout();
+    }
+  </script>
+</body>
+</html>
