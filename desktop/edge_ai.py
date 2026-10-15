@@ -58,6 +58,7 @@ class EdgeResult:
     latency_ms: float
     message: str
     bbox: Optional[List[float]] = None
+    embedding: Optional[np.ndarray] = None
 
 
 def _providers():
@@ -548,7 +549,8 @@ def process_frame(
 
     ms = (time.perf_counter() - t0) * 1000
     if sid is None:
-        return EdgeResult(False, False, None, None, sim, ms, f"Không khớp (sim={sim:.3f})", bbox=bbox)
+        return EdgeResult(False, False, None, None, sim, ms,
+                          f"Không khớp (sim={sim:.3f})", bbox=bbox, embedding=emb)
 
     return EdgeResult(
         True, False, sid, name, sim, ms,

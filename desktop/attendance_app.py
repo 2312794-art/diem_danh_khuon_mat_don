@@ -10,6 +10,8 @@ import os
 import sys
 import threading
 import time
+import tkinter as tk
+from tkinter import ttk
 from datetime import datetime
 from pathlib import Path
 from collections import deque
@@ -66,12 +68,24 @@ class FaceAttendanceApp:
         self.room = None
         self.class_name = ""
         self.gallery = []  # [(id, name, emb np)]
+        self.students_by_id = {}
+        self.attendance_rows = {}
+        self.unknown_rows = 0
+        self._unknown_active_iid = None
+        self._unknown_embedding = None
+        self._unknown_frame = None
+        self._unknown_candidate = None
+        self._candidate_query_embedding = None
+        self._lookup_in_progress = False
+        self._sent_request_student_ids = set()
+        self._request_in_progress_ids = set()
         self.last_match_uid = None
         self.last_match_time = 0.0
         self.frame_i = 0
         self.fps_times = deque(maxlen=30)
         self.last_result: Optional[EdgeResult] = None
         self._lock = threading.Lock()
+        self._ui_thread_id = threading.get_ident()
 
         self._build_ui()
         # Cold-start models trên thread phụ
@@ -141,53 +155,378 @@ class FaceAttendanceApp:
         self.fps_label = L("FPS: — | Latency: —")
         self.fps_label.pack(side="right", padx=8)
 
-        if USE_CTK:
-            body = ctk.CTkFrame(self.root, fg_color="transparent")
-        else:
-            body = ctk.Frame(self.root, bg="#F3F1FD")
+        body = tk.Frame(self.root, bg="#F3F1FD")
         body.pack(fill="both", expand=True, padx=16, pady=(4, 16))
 
-        if USE_CTK:
-            camera_card = ctk.CTkFrame(body, fg_color="#FFFFFF", corner_radius=16)
-        else:
-            camera_card = ctk.Frame(body, bg="#FFFFFF")
-        camera_card.pack(side="left", fill="both", expand=True)
-        if USE_CTK:
-            ctk.CTkLabel(camera_card, text="KHU VỰC CAMERA", text_color="#9993AF",
-                         font=("", 10, "bold")).pack(anchor="w", padx=18, pady=(14, 4))
-            self.video_label = ctk.CTkLabel(camera_card, text="Camera chưa được bật\n\nĐồng bộ session để bắt đầu",
-                                            text_color="#AAA5BC", font=("", 16), fg_color="#F7F6FC",
-                                            corner_radius=12)
-        else:
-            self.video_label = ctk.Label(camera_card, text="Camera chưa được bật\n\nĐồng bộ session để bắt đầu",
-                                         fg="#AAA5BC", bg="#F7F6FC")
-        self.video_label.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+        top_row = tk.Frame(body, bg="#F3F1FD", height=350)
+        top_row.pack(fill="both", expand=True)
+        top_row.pack_propagate(False)
+        top_row.grid_columnconfigure(0, weight=3, uniform="top_cards")
+        top_row.grid_columnconfigure(1, weight=2, uniform="top_cards")
+        top_row.grid_rowconfigure(0, weight=1)
 
-        right = ctk.CTkFrame(body, width=310, fg_color="#FFFFFF", corner_radius=16) if USE_CTK else ctk.Frame(body, width=310, bg="#FFFFFF")
-        right.pack(side="right", fill="y", padx=(12, 0))
-        if USE_CTK:
-            ctk.CTkLabel(right, text="Nhật ký Edge", text_color="#332D52",
-                         font=("", 14, "bold")).pack(anchor="w", padx=16, pady=(16, 2))
-            ctk.CTkLabel(right, text="Hoạt động hệ thống theo thời gian thực",
-                         text_color="#9993AF", font=("", 10)).pack(anchor="w", padx=16, pady=(0, 10))
-            self.log_box = ctk.CTkTextbox(right, width=280, height=480,
-                                          fg_color="#F8F7FC", border_width=1,
-                                          border_color="#EEEAF8", text_color="#5C5676",
-                                          corner_radius=10)
-        else:
-            ctk.Label(right, text="Nhật ký Edge", fg="#332D52", bg="#FFFFFF").pack()
-            self.log_box = ctk.Text(right, width=36, height=32, bg="#F8F7FC", fg="#5C5676")
-        self.log_box.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+        camera_card = tk.Frame(top_row, bg="#FFFFFF", highlightthickness=1,
+                               highlightbackground="#E7E4F0")
+        camera_card.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
+        tk.Label(camera_card, text="KHU VỰC CAMERA", fg="#5184B8", bg="#FFFFFF",
+                 font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x", padx=14, pady=(12, 6))
+        self.video_label = tk.Label(
+            camera_card, text="Camera chưa được bật\n\nĐồng bộ buổi điểm danh để bắt đầu",
+            fg="#AAA5BC", bg="#F7F8FC", font=("Segoe UI", 14),
+        )
+        self.video_label.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+
+        info_card = tk.Frame(top_row, bg="#FFFFFF",
+                             highlightthickness=1, highlightbackground="#E7E4F0")
+        info_card.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
+        tk.Label(info_card, text="Thông tin sinh viên", fg="#5184B8", bg="#FFFFFF",
+                 font=("Segoe UI", 11, "bold"), anchor="w").pack(fill="x", padx=16, pady=(14, 12))
+        self.student_name_label = tk.Label(info_card, text="Chưa nhận diện", fg="#28364A",
+                                           bg="#FFFFFF", font=("Segoe UI", 17, "bold"), anchor="w")
+        self.student_name_label.pack(fill="x", padx=16, pady=(4, 8))
+        self.student_code_label = tk.Label(info_card, text="Mã sinh viên: —", fg="#667085",
+                                           bg="#FFFFFF", font=("Segoe UI", 11), anchor="w")
+        self.student_code_label.pack(fill="x", padx=16, pady=5)
+        self.student_class_label = tk.Label(info_card, text="Lớp: —", fg="#667085",
+                                            bg="#FFFFFF", font=("Segoe UI", 11), anchor="w")
+        self.student_class_label.pack(fill="x", padx=16, pady=5)
+        self.student_status_label = tk.Label(info_card, text="Đưa khuôn mặt vào khung hình",
+                                             fg="#667085", bg="#F7F8FC", font=("Segoe UI", 10),
+                                             anchor="w", padx=10, pady=9)
+        self.student_status_label.pack(fill="x", padx=16, pady=(14, 8))
+        self.student_time_label = tk.Label(info_card, text="Thời gian: —", fg="#667085",
+                                           bg="#FFFFFF", font=("Segoe UI", 10), anchor="w")
+        self.student_time_label.pack(fill="x", padx=16, pady=4)
+        self.lookup_button = tk.Button(
+            info_card, text="Tìm sinh viên trong toàn hệ thống",
+            command=self.lookup_unknown_student, state="disabled",
+            fg="#FFFFFF", bg="#3978A8", activebackground="#2D648F",
+            activeforeground="#FFFFFF", relief="flat", padx=10, pady=8,
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.lookup_button.pack(fill="x", padx=16, pady=(14, 6))
+        self.approve_button = tk.Button(
+            info_card, text="Gửi yêu cầu giảng viên thêm vào lớp",
+            command=self.send_student_request, state="disabled",
+            fg="#FFFFFF", bg="#15805D", activebackground="#116A4D",
+            activeforeground="#FFFFFF", relief="flat", padx=10, pady=8,
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.approve_button.pack(fill="x", padx=16, pady=6)
+
+        list_card = tk.Frame(body, bg="#FFFFFF", height=220,
+                             highlightthickness=1, highlightbackground="#E7E4F0")
+        list_card.pack(fill="x", pady=(12, 0))
+        list_card.pack_propagate(False)
+        list_header = tk.Frame(list_card, bg="#7565D9", height=38)
+        list_header.pack(fill="x", padx=10, pady=(10, 7))
+        list_header.pack_propagate(False)
+        tk.Label(list_header, text="  Danh sách điểm danh", fg="#FFFFFF", bg="#7565D9",
+                 font=("Segoe UI", 10, "bold"), anchor="w").pack(side="left", fill="y")
+        self.attendance_count_label = tk.Label(list_header, text="0", fg="#FFFFFF", bg="#8D80E1",
+                                               font=("Segoe UI", 9, "bold"), padx=8)
+        self.attendance_count_label.pack(side="right", padx=8, pady=5)
+
+        tabs = ttk.Notebook(list_card)
+        tabs.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        self.attendance_tabs = tabs
+        attendance_tab = tk.Frame(tabs, bg="#FFFFFF")
+        unknown_tab = tk.Frame(tabs, bg="#FFFFFF")
+        tabs.add(attendance_tab, text="Đã điểm danh")
+        self.unknown_tab = unknown_tab
+        tabs.add(unknown_tab, text="Sinh viên chưa nhận diện (0)")
+
+        table_frame = tk.Frame(attendance_tab, bg="#FFFFFF")
+        table_frame.pack(fill="both", expand=True, padx=2, pady=2)
+        style = ttk.Style()
+        style.configure("Attendance.Treeview", rowheight=30, font=("Segoe UI", 9))
+        style.configure("Attendance.Treeview.Heading", font=("Segoe UI", 9, "bold"))
+        columns = ("index", "student_code", "name", "class", "time", "status")
+        self.attendance_table = ttk.Treeview(table_frame, columns=columns, show="headings",
+                                             style="Attendance.Treeview", height=5)
+        headings = {"index": "STT", "student_code": "Mã SV", "name": "Họ tên",
+                    "class": "Lớp", "time": "Thời gian", "status": "Kết quả"}
+        widths = {"index": 48, "student_code": 135, "name": 190, "class": 100,
+                  "time": 150, "status": 100}
+        for col in columns:
+            self.attendance_table.heading(col, text=headings[col])
+            self.attendance_table.column(col, width=widths[col], anchor="center" if col in ("index", "time", "status") else "w")
+        scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.attendance_table.yview)
+        self.attendance_table.configure(yscrollcommand=scrollbar.set)
+        self.attendance_table.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        tk.Label(unknown_tab,
+                 text="Các lượt khuôn mặt chưa khớp sinh viên trong danh sách lớp. "
+                      "Vui lòng kiểm tra danh tính trước khi thêm sinh viên vào lớp.",
+                 fg="#667085", bg="#FFFFFF", font=("Segoe UI", 9), anchor="w",
+                 justify="left", wraplength=980).pack(fill="x", padx=8, pady=(5, 7))
+        unknown_frame = tk.Frame(unknown_tab, bg="#FFFFFF")
+        unknown_frame.pack(fill="both", expand=True, padx=2, pady=(0, 2))
+        unknown_columns = ("index", "time", "similarity", "message")
+        self.unknown_table = ttk.Treeview(unknown_frame, columns=unknown_columns,
+                                          show="headings", style="Attendance.Treeview", height=4)
+        for col, title, width in (("index", "STT", 55), ("time", "Thời gian", 180),
+                                  ("similarity", "Độ khớp cao nhất", 155),
+                                  ("message", "Trạng thái", 400)):
+            self.unknown_table.heading(col, text=title)
+            self.unknown_table.column(col, width=width,
+                                      anchor="center" if col in ("index", "time", "similarity") else "w")
+        unknown_scroll = ttk.Scrollbar(unknown_frame, orient="vertical",
+                                       command=self.unknown_table.yview)
+        self.unknown_table.configure(yscrollcommand=unknown_scroll.set)
+        self.unknown_table.pack(side="left", fill="both", expand=True)
+        unknown_scroll.pack(side="right", fill="y")
+        self.log_box = None
 
     def log(self, msg: str):
         ts = datetime.now().strftime("%H:%M:%S")
         line = f"[{ts}] {msg}\n"
+        if threading.get_ident() != self._ui_thread_id:
+            try:
+                self.root.after(0, self._append_log, line)
+            except Exception:
+                pass
+            print(line.strip())
+            return
+        self._append_log(line)
+
+    def _append_log(self, line: str):
+        print(line.strip())
+
+    def _set_status(self, text: str):
         try:
-            self.log_box.insert("end", line)
-            self.log_box.see("end")
+            if threading.get_ident() == self._ui_thread_id:
+                self.status_label.configure(text=text)
+            else:
+                self.root.after(0, lambda: self.status_label.configure(text=text))
         except Exception:
             pass
-        print(line.strip())
+
+    def _show_student_result(self, result: EdgeResult):
+        """Update the student card and keep one attendance row per student."""
+        student = self.students_by_id.get(int(result.student_id), {})
+        name = result.full_name or student.get("full_name") or "Sinh viên"
+        code = student.get("student_id") or str(result.student_id)
+        now = datetime.now().astimezone().strftime("%d/%m/%Y %H:%M:%S")
+        self.student_name_label.configure(text=name)
+        self.student_code_label.configure(text=f"Mã sinh viên: {code}")
+        self.student_class_label.configure(text=f"Lớp: {self.class_name or '—'}")
+        self.student_status_label.configure(
+            text=f"✓  Đã điểm danh  •  Độ khớp {result.confidence:.3f}", fg="#12805C"
+        )
+        self.student_time_label.configure(text=f"Thời gian: {now}")
+
+        sid = int(result.student_id)
+        existing = self.attendance_rows.get(sid)
+        values = (len(self.attendance_rows) + (0 if existing else 1), code, name,
+                  self.class_name or "—", now, "Có mặt")
+        if existing:
+            self.attendance_table.item(existing, values=values)
+            self.attendance_table.move(existing, "", 0)
+        else:
+            iid = self.attendance_table.insert("", 0, values=values)
+            self.attendance_rows[sid] = iid
+        for index, iid in enumerate(self.attendance_table.get_children(), start=1):
+            row_values = list(self.attendance_table.item(iid, "values"))
+            row_values[0] = index
+            self.attendance_table.item(iid, values=row_values)
+        self.attendance_count_label.configure(text=str(len(self.attendance_rows)))
+        self._unknown_active_iid = None
+        self._unknown_candidate = None
+        self._candidate_query_embedding = None
+        self._unknown_embedding = None
+        self._unknown_frame = None
+        self._lookup_in_progress = False
+        self.lookup_button.configure(state="disabled")
+        self.approve_button.configure(state="disabled")
+
+    def _show_unrecognized(self, result: EdgeResult):
+        if self._unknown_embedding is not None and not self._lookup_in_progress:
+            self.lookup_button.configure(state="normal")
+        if self._unknown_candidate and self._candidate_query_embedding is not None:
+            current = self._unknown_embedding
+            if current is not None:
+                similarity = float(np.dot(current, self._candidate_query_embedding) /
+                                   ((np.linalg.norm(current) + 1e-8) *
+                                    (np.linalg.norm(self._candidate_query_embedding) + 1e-8)))
+                if similarity >= 0.55:
+                    return
+            self._unknown_candidate = None
+            self._candidate_query_embedding = None
+            self.approve_button.configure(state="disabled")
+        now = datetime.now().astimezone().strftime("%d/%m/%Y %H:%M:%S")
+        sim_text = f"{result.confidence:.3f}" if result.confidence >= 0 else "—"
+        self.student_name_label.configure(text="Sinh viên chưa được nhận diện")
+        self.student_code_label.configure(text="Mã sinh viên: Chưa xác định")
+        self.student_class_label.configure(text=f"Lớp đang điểm danh: {self.class_name or '—'}")
+        self.student_status_label.configure(
+            text="Khuôn mặt chưa khớp sinh viên trong lớp", fg="#B54708"
+        )
+        self.student_time_label.configure(text=f"Thời gian quét: {now}  •  Độ khớp: {sim_text}")
+
+        values = (self.unknown_rows + (0 if self._unknown_active_iid else 1), now,
+                  sim_text, result.message or "Chưa khớp danh sách lớp")
+        if self._unknown_active_iid:
+            self.unknown_table.item(self._unknown_active_iid, values=values)
+            self.unknown_table.move(self._unknown_active_iid, "", 0)
+        else:
+            self.unknown_rows += 1
+            self._unknown_active_iid = self.unknown_table.insert("", 0, values=values)
+            while len(self.unknown_table.get_children()) > 50:
+                self.unknown_table.delete(self.unknown_table.get_children()[-1])
+        for index, iid in enumerate(self.unknown_table.get_children(), start=1):
+            row_values = list(self.unknown_table.item(iid, "values"))
+            row_values[0] = index
+            self.unknown_table.item(iid, values=row_values)
+        self.attendance_tabs.tab(self.unknown_tab,
+                                 text=f"Sinh viên chưa nhận diện ({self.unknown_rows})")
+
+    def _show_no_face(self):
+        self._unknown_active_iid = None
+        self._unknown_candidate = None
+        self._candidate_query_embedding = None
+        self._unknown_embedding = None
+        self._unknown_frame = None
+        self._lookup_in_progress = False
+        self.lookup_button.configure(state="disabled")
+        self.approve_button.configure(state="disabled")
+        self.student_name_label.configure(text="Đang chờ khuôn mặt")
+        self.student_code_label.configure(text="Mã sinh viên: —")
+        self.student_class_label.configure(text=f"Lớp đang điểm danh: {self.class_name or '—'}")
+        self.student_status_label.configure(text="Đưa khuôn mặt vào khung hình", fg="#667085")
+        self.student_time_label.configure(text="Thời gian: —")
+
+    def lookup_unknown_student(self):
+        if not self.session_id or self._unknown_embedding is None:
+            return
+        embedding = self._unknown_embedding.copy()
+        self._lookup_in_progress = True
+        self.lookup_button.configure(state="disabled", text="Đang tra cứu...")
+        threading.Thread(target=self._lookup_student_worker, args=(embedding,), daemon=True).start()
+
+    def _lookup_student_worker(self, embedding):
+        try:
+            response = requests.post(
+                f"{self._api_base()}/api/desktop/face-lookup",
+                json={"session_id": self.session_id, "embedding": embedding.tolist()},
+                timeout=10,
+            )
+            response.raise_for_status()
+            data = response.json()
+            self.root.after(0, self._show_lookup_result, data, embedding)
+        except Exception as exc:
+            self.root.after(0, self._lookup_failed, str(exc))
+
+    def _show_lookup_result(self, data, embedding):
+        self._lookup_in_progress = False
+        self.lookup_button.configure(text="Tìm sinh viên trong toàn hệ thống", state="normal")
+        if self._unknown_embedding is None:
+            self._lookup_failed("Không còn khuôn mặt cần tra cứu; hãy quét lại.")
+            return
+        current_similarity = float(np.dot(self._unknown_embedding, embedding) /
+                                   ((np.linalg.norm(self._unknown_embedding) + 1e-8) *
+                                    (np.linalg.norm(embedding) + 1e-8)))
+        if current_similarity < 0.55:
+            self._lookup_failed("Khuôn mặt đã thay đổi; quét lại rồi tra cứu lần nữa.")
+            return
+        if not data.get("found"):
+            self._unknown_candidate = None
+            self._candidate_query_embedding = None
+            self.approve_button.configure(state="disabled")
+            if data.get("reason") == "below_threshold":
+                refreshed = int(data.get("embeddings_refreshed", 0))
+                refresh_note = f" Đã cập nhật {refreshed} mẫu từ ảnh gốc." if refreshed else ""
+                self.student_status_label.configure(
+                    text=(f"Có ảnh đã duyệt nhưng độ khớp thấp ({data['confidence']:.3f}; "
+                          f"cần ≥ {data['threshold']:.3f}). Hãy nhìn thẳng/gần camera rồi quét lại."
+                          f"{refresh_note}"),
+                    fg="#B54708")
+            elif data.get("reason") == "no_approved_templates":
+                self.student_status_label.configure(
+                    text="Không có embedding ảnh đã duyệt dùng được; cần kiểm tra lại ảnh/embedding trên hệ thống.",
+                    fg="#B42318")
+            elif data.get("reason") == "no_candidates":
+                self.student_status_label.configure(
+                    text="Các hồ sơ có ảnh đã duyệt có thể đã thuộc lớp này; không có SV ngoài lớp để gửi yêu cầu.",
+                    fg="#667085")
+            elif data.get("ambiguous"):
+                self.student_status_label.configure(
+                    text=(f"Có nhiều hồ sơ gần giống (điểm cao nhất {data['confidence']:.3f}); "
+                          "không thể tự chọn."), fg="#B54708")
+            else:
+                self.student_status_label.configure(
+                    text="Không có hồ sơ phù hợp; bỏ qua, không thêm sinh viên", fg="#667085")
+            return
+
+        self._unknown_candidate = data
+        self._candidate_query_embedding = embedding.copy()
+        student = data["student"]
+        self.student_name_label.configure(text=student.get("full_name", "Sinh viên"))
+        self.student_code_label.configure(text=f"Mã sinh viên: {student.get('student_id') or '—'}")
+        self.student_class_label.configure(text=f"Lớp hiện tại: {self.class_name or '—'}")
+        if int(student["id"]) in self._sent_request_student_ids:
+            self.student_status_label.configure(
+                text="Đã gửi thông báo lên web giảng viên; đang chờ duyệt.", fg="#12805C")
+            self.approve_button.configure(state="disabled")
+        else:
+            self.student_status_label.configure(
+                text=f"Đã tìm thấy hồ sơ • Độ khớp {data['confidence']:.3f}.", fg="#12805C")
+            self.student_time_label.configure(text="Đang tự gửi yêu cầu lên web giảng viên...")
+            self.approve_button.configure(state="disabled", text="Đang gửi yêu cầu...")
+            self._queue_student_request(data)
+
+    def _lookup_failed(self, message):
+        self._lookup_in_progress = False
+        state = "normal" if self._unknown_embedding is not None else "disabled"
+        self.lookup_button.configure(text="Tìm sinh viên trong toàn hệ thống", state=state)
+        self.student_status_label.configure(text=message[:100], fg="#B42318")
+
+    def send_student_request(self):
+        candidate = self._unknown_candidate
+        if not candidate or not self.session_id:
+            return
+        self._queue_student_request(candidate)
+
+    def _queue_student_request(self, candidate):
+        student_id = int(candidate["student"]["id"])
+        if student_id in self._sent_request_student_ids or student_id in self._request_in_progress_ids:
+            return
+        self._request_in_progress_ids.add(student_id)
+        self.approve_button.configure(state="disabled", text="Đang gửi yêu cầu...")
+        threading.Thread(target=self._send_student_request_worker,
+                         args=(candidate,), daemon=True).start()
+
+    def _send_student_request_worker(self, candidate):
+        try:
+            student = candidate["student"]
+            response = requests.post(
+                f"{self._api_base()}/api/desktop/session/{self.session_id}/enrollment-requests",
+                json={"student_id": student["id"], "confidence": candidate["confidence"]},
+                timeout=15,
+            )
+            response.raise_for_status()
+            data = response.json()
+            self.root.after(0, self._student_request_sent, data, candidate)
+        except Exception as exc:
+            self.root.after(0, self._student_request_failed, str(exc))
+
+    def _student_request_sent(self, data, candidate):
+        student = candidate["student"]
+        student_id = int(student["id"])
+        self._request_in_progress_ids.discard(student_id)
+        self._sent_request_student_ids.add(student_id)
+        self.student_status_label.configure(
+            text="Đã gửi thông báo đến giảng viên. Chờ duyệt trên web.", fg="#12805C")
+        self.student_time_label.configure(text=f"Yêu cầu #{data.get('request_id', '—')} • chưa điểm danh")
+        self.approve_button.configure(text="Đã gửi yêu cầu", state="disabled")
+        self.log(f"Đã gửi yêu cầu thêm {student['full_name']} vào lớp {self.class_name}; chờ duyệt web")
+
+    def _student_request_failed(self, message):
+        if self._unknown_candidate:
+            self._request_in_progress_ids.discard(int(self._unknown_candidate["student"]["id"]))
+        self.approve_button.configure(text="Gửi yêu cầu giảng viên thêm vào lớp", state="normal")
+        self.student_status_label.configure(text=message[:100], fg="#B42318")
 
     def _api_base(self) -> str:
         global API_BASE
@@ -238,6 +577,30 @@ class FaceAttendanceApp:
             # Thu thập mọi mẫu embedding (mỗi SV có thể nhiều ảnh)
             raw_samples = []
             sample_source_ids = {}
+            self.students_by_id = {int(s["id"]): s for s in data.get("students", [])}
+            self.attendance_rows.clear()
+            for row_id in self.attendance_table.get_children():
+                self.attendance_table.delete(row_id)
+            self.unknown_rows = 0
+            self._unknown_active_iid = None
+            self._unknown_candidate = None
+            self._candidate_query_embedding = None
+            self._unknown_embedding = None
+            self._unknown_frame = None
+            self._lookup_in_progress = False
+            self._sent_request_student_ids.clear()
+            self._request_in_progress_ids.clear()
+            self.lookup_button.configure(state="disabled", text="Tìm sinh viên trong toàn hệ thống")
+            self.approve_button.configure(state="disabled", text="Gửi yêu cầu giảng viên thêm vào lớp")
+            for row_id in self.unknown_table.get_children():
+                self.unknown_table.delete(row_id)
+            self.attendance_tabs.tab(self.unknown_tab, text="Sinh viên chưa nhận diện (0)")
+            self.attendance_count_label.configure(text="0")
+            self.student_name_label.configure(text="Chưa nhận diện")
+            self.student_code_label.configure(text="Mã sinh viên: —")
+            self.student_class_label.configure(text=f"Lớp: {self.class_name or '—'}")
+            self.student_status_label.configure(text="Đưa khuôn mặt vào khung hình", fg="#667085")
+            self.student_time_label.configure(text="Thời gian: —")
             for s in data.get("students", []):
                 embs = s.get("embeddings") or []
                 face_ids = s.get("embedding_face_ids") or []
@@ -311,12 +674,35 @@ class FaceAttendanceApp:
             self.start_btn.configure(text="Bắt đầu camera")
             self.log("Dừng camera")
             return
-        self.cap = cv2.VideoCapture(0)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
-        if not self.cap.isOpened():
-            self.log("Không mở được camera")
+        # Camera drivers on Windows do not all work with the default backend.
+        # Try common backends and device indices, then verify an actual frame
+        # can be read before reporting that the camera is ready.
+        candidates = []
+        if sys.platform == "win32":
+            candidates.extend((i, backend) for i in range(3)
+                              for backend in (cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY))
+        else:
+            candidates.extend((i, cv2.CAP_ANY) for i in range(3))
+        self.cap = None
+        for index, backend in candidates:
+            cap = cv2.VideoCapture(index, backend)
+            if cap.isOpened():
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                cap.set(cv2.CAP_PROP_FPS, 30)
+                # Some drivers need a few reads while the stream initializes.
+                for _ in range(8):
+                    ret, first_frame = cap.read()
+                    if ret and first_frame is not None and first_frame.size:
+                        self.cap = cap
+                        self.log(f"Mở camera {index} (backend {backend})")
+                        break
+                    time.sleep(0.08)
+            if self.cap is not None:
+                break
+            cap.release()
+        if self.cap is None:
+            self.log("Không mở được camera. Kiểm tra quyền truy cập, ứng dụng khác đang dùng camera và thiết bị camera.")
             return
         self.running = True
         self.start_btn.configure(text="Dừng camera")
@@ -326,11 +712,13 @@ class FaceAttendanceApp:
     def _capture_loop(self):
         """Luồng hiển thị ≥25 FPS; AI xử lý subsample frames."""
         from PIL import Image, ImageTk
+        cap = self.cap
 
-        while self.running and self.cap:
+        while self.running and cap is not None:
             t_frame = time.perf_counter()
-            ret, frame = self.cap.read()
-            if not ret:
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                self.log("Mất tín hiệu camera")
                 break
             self.frame_i += 1
             display = frame.copy()
@@ -396,28 +784,41 @@ class FaceAttendanceApp:
             if len(self.fps_times) >= 5:
                 fps = 1.0 / (sum(self.fps_times) / len(self.fps_times) + 1e-9)
                 lat = res.latency_ms if res else 0
+                label_text = f"FPS: {fps:.1f} | Latency: {lat:.0f}ms"
                 try:
-                    self.fps_label.configure(text=f"FPS: {fps:.1f} | Latency: {lat:.0f}ms")
+                    self.root.after(0, lambda text=label_text: self.fps_label.configure(text=text))
                 except Exception:
                     pass
 
             rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(rgb)
             try:
-                if USE_CTK:
-                    # CustomTkinter yêu cầu CTkImage (tránh cảnh báo PhotoImage)
-                    ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(img.width, img.height))
-                    self.video_label.configure(image=ctk_img, text="")
-                    self.video_label._video_img = ctk_img  # giữ tham chiếu
-                else:
-                    imgtk = ImageTk.PhotoImage(image=img)
-                    self.video_label.imgtk = imgtk
-                    self.video_label.configure(image=imgtk)
+                self.root.after(0, self._show_frame, img, ImageTk)
             except Exception:
                 pass
 
             elapsed = time.perf_counter() - t_frame
             time.sleep(max(0.0, 0.033 - elapsed))
+
+        # Leave the UI and capture state consistent if the device is unplugged
+        # or its driver stops returning frames.
+        self.running = False
+        if self.cap is cap:
+            self.cap = None
+        if cap is not None:
+            cap.release()
+        try:
+            self.root.after(0, lambda: self.start_btn.configure(text="Bắt đầu camera"))
+        except Exception:
+            pass
+
+    def _show_frame(self, img, ImageTk):
+        try:
+            imgtk = ImageTk.PhotoImage(image=img)
+            self.video_label.imgtk = imgtk
+            self.video_label.configure(image=imgtk, text="")
+        except Exception:
+            pass
 
     def _handle_result(self, result: EdgeResult, frame_bgr):
         now = time.time()
@@ -432,10 +833,25 @@ class FaceAttendanceApp:
             return
 
         if not result.ok or result.student_id is None:
+            if result.embedding is not None:
+                self._unknown_embedding = result.embedding.copy()
+                self._unknown_frame = frame_bgr.copy()
+                if self._candidate_query_embedding is not None:
+                    sim = float(np.dot(self._unknown_embedding, self._candidate_query_embedding) /
+                                ((np.linalg.norm(self._unknown_embedding) + 1e-8) *
+                                 (np.linalg.norm(self._candidate_query_embedding) + 1e-8)))
+                    if sim < 0.55:
+                        self._unknown_candidate = None
+                        self._candidate_query_embedding = None
+                        self.root.after(0, lambda: self.approve_button.configure(state="disabled"))
             # Log không khớp mỗi 2s để người dùng biết hệ thống đang chạy
             if now - getattr(self, "_last_miss_log", 0) > 2:
                 self._last_miss_log = now
                 self.log(f"… {result.message}")
+                if "không có khuôn mặt" in (result.message or "").lower():
+                    self.root.after(0, self._show_no_face)
+                else:
+                    self.root.after(0, self._show_unrecognized, result)
             return
 
         # Cooldown cùng một người
@@ -449,9 +865,8 @@ class FaceAttendanceApp:
 
         self.log(f"ĐIỂM DANH: {result.full_name} | sim={result.confidence:.3f} | {result.latency_ms:.0f} ms")
         try:
-            self.status_label.configure(
-                text=f"{result.full_name} — OK | {self.room}"
-            )
+            self._set_status(f"{result.full_name} — OK | {self.room}")
+            self.root.after(0, self._show_student_result, result)
         except Exception:
             pass
         threading.Thread(

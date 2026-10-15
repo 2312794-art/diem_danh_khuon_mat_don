@@ -45,7 +45,8 @@ python desktop/attendance_app.py
 1. Đăng nhập → Xem lớp của mình
 2. Thêm sinh viên vào lớp
 3. Mở buổi điểm danh (chọn class_id + phòng)
-4. Đóng buổi → xem thống kê
+4. Mở mục **Yêu cầu thêm SV** trên web để duyệt sinh viên đã có hồ sơ nhưng chưa thuộc lớp
+5. Đóng buổi → xem thống kê
 
 ### Sinh viên
 1. Đăng nhập → Upload ảnh khuôn mặt (chờ admin duyệt)
@@ -55,7 +56,8 @@ python desktop/attendance_app.py
 1. Nhập mã phòng đã tạo trên web (vd: A101)
 2. Bấm **Kết nối buổi học** (phải có session đang mở)
 3. Bật camera → hệ thống tự nhận diện + chống spoof
-4. Khi phát hiện ảnh giả mạo → log ảnh về server
+4. Nếu tìm thấy hồ sơ SV ngoài lớp, desktop tự gửi yêu cầu lên web giảng viên (không cần đăng nhập giảng viên ở desktop); chỉ ghi danh/điểm danh sau khi giảng viên duyệt
+5. Khi phát hiện ảnh giả mạo → log ảnh về server
 
 ## API chính
 - `POST /api/auth/login`
@@ -64,6 +66,8 @@ python desktop/attendance_app.py
 - `POST /api/face/{id}/review` (Admin)
 - `POST /api/sessions` (mở buổi điểm danh)
 - `GET  /api/desktop/room/{room}/session`
+- `POST /api/desktop/session/{id}/enrollment-requests`
+- `GET  /api/lecturer/enrollment-requests` / `POST /api/lecturer/enrollment-requests/{id}/review`
 - `POST /api/desktop/checkin` (desktop gửi frame)
 
 ## Ghi chú chống giả mạo

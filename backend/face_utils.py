@@ -21,12 +21,15 @@ MODELS_DIR.mkdir(parents=True, exist_ok=True)
 SFACE_PATH = MODELS_DIR / "face_recognition_sface_2021dec.onnx"
 YUNET_PATH = MODELS_DIR / "face_detection_yunet_2023mar.onnx"
 
-# Ngưỡng cosine của SFace theo tài liệu OpenCV (~0.363)
+# Ngưỡng cosine tham chiếu của SFace theo OpenCV. Gallery thực tế cần hiệu
+# chỉnh theo dữ liệu enroll, nhưng không nên siết cao hơn mặc định tùy tiện.
 SFACE_COSINE_THRESHOLD = 0.363
 
 _sface_session: Optional[ort.InferenceSession] = None
 _yunet_session: Optional[ort.InferenceSession] = None
 _cv_sface = None
+_cv_yunet = None
+_cv_yunet_size = (0, 0)
 
 
 def _get_sface() -> ort.InferenceSession:
@@ -72,8 +75,39 @@ def load_image_bgr_from_bytes(data: bytes) -> Optional[np.ndarray]:
         return None
 
 
-def _detect_faces_yunet(image_bgr: np.ndarray, score_thresh: float = 0.45) -> List[dict]:
-    """Detect faces with YuNet ONNX. Returns list of {bbox, kps, score}."""
+def _detect_faces_yunet(image_bgr: np.ndarray, score_thresh: float = 0.35) -> List[dict]:
+    """Detect faces with YuNet and return boxes and five landmarks.
+
+    Prefer OpenCV's YuNet wrapper because it decodes the ONNX output and
+    landmark coordinates using the model's canonical implementation. Keep the
+    raw ONNX decoder as a compatibility fallback.
+    """
+    global _cv_yunet, _cv_yunet_size
+    try:
+        import cv2
+        size = (image_bgr.shape[1], image_bgr.shape[0])
+        if _cv_yunet is None or _cv_yunet_size != size:
+            _cv_yunet = cv2.FaceDetectorYN.create(
+                str(YUNET_PATH), "", size,
+                score_threshold=float(score_thresh), nms_threshold=0.3, top_k=5000,
+            )
+            _cv_yunet_size = size
+        _cv_yunet.setScoreThreshold(float(score_thresh))
+        _retval, detections = _cv_yunet.detect(image_bgr)
+        if detections is not None and len(detections):
+            faces = []
+            for row in detections:
+                x, y, bw, bh = [float(v) for v in row[:4]]
+                faces.append({
+                    "bbox": [x, y, x + bw, y + bh],
+                    "kps": np.asarray(row[4:14], dtype=np.float32).reshape(5, 2),
+                    "score": float(row[14]),
+                })
+            return faces
+    except Exception:
+        # Older OpenCV builds can still use the ONNX decoder below.
+        pass
+
     session = _get_yunet()
     h, w = image_bgr.shape[:2]
     # Model YuNet 2023mar expect fixed 640x640
@@ -305,10 +339,14 @@ def match_face(
     if not gallery:
         return None, -1.0
 
-    scores = []
+    # Several approved photos belong to the same student. Collapse them before
+    # computing the runner-up margin; otherwise that student's second photo
+    # can incorrectly compete with their own best match.
+    best_by_student = {}
     for uid, emb in gallery:
         sim = cosine_similarity(query_emb, emb)
-        scores.append((uid, sim))
+        best_by_student[uid] = max(sim, best_by_student.get(uid, -1.0))
+    scores = list(best_by_student.items())
 
     # Sắp xếp giảm dần theo độ tương đồng
     scores.sort(key=lambda x: x[1], reverse=True)

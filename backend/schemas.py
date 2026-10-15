@@ -224,3 +224,17 @@ class DesktopResult(BaseModel):
     room: Optional[str] = None
     device_info: Optional[str] = None
     latency_ms: Optional[float] = None
+
+
+class DesktopFaceLookup(BaseModel):
+    session_id: int
+    embedding: List[float] = Field(..., min_length=128, max_length=128)
+
+
+class DesktopEnrollmentRequestCreate(BaseModel):
+    student_id: int
+    confidence: float = Field(..., ge=-1.0, le=1.0)
+
+
+class EnrollmentRequestReview(BaseModel):
+    approved: bool

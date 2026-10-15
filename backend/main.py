@@ -12,16 +12,21 @@ from pathlib import Path
 
 from database import (
     get_db, init_db, User, UserRole, Course, Class, Enrollment,
-    FaceData, FaceDataStatus, AttendanceSession, AttendanceRecord,
+    FaceData, FaceDataStatus, AttendanceSession, AttendanceRecord, EnrollmentRequest,
     AttendanceStatus, SpoofLog
 )
 import schemas, auth
 from face_utils import (
     extract_embedding_from_file, extract_embedding, embedding_to_bytes,
     bytes_to_embedding, match_face, check_anti_spoof, save_image, UPLOADS_DIR,
-    load_image_bgr, load_image_bgr_from_bytes, SFACE_COSINE_THRESHOLD,
+    load_image_bgr, load_image_bgr_from_bytes,
 )
 import numpy as np
+
+# Keep cross-system lookup aligned with the desktop SFace matcher. A lecturer
+# still reviews every request before the student is enrolled.
+DESKTOP_LOOKUP_THRESHOLD = 0.28
+DESKTOP_LOOKUP_MARGIN = 0.06
 
 app = FastAPI(
     title="Face Attendance System API",
@@ -807,7 +812,7 @@ async def desktop_checkin(
             except Exception:
                 continue
 
-    matched_id, sim = match_face(emb, gallery, threshold=0.45)
+    matched_id, sim = match_face(emb, gallery)
     tmp.unlink(missing_ok=True)
 
     if matched_id is None:
@@ -852,6 +857,243 @@ async def desktop_checkin(
         message=f"Điểm danh thành công: {student.full_name if student else matched_id} ({status.value})",
     )
 
+
+
+@app.post("/api/desktop/face-lookup")
+def desktop_face_lookup(
+    data: schemas.DesktopFaceLookup,
+    db: Session = Depends(get_db),
+):
+    """Find an existing student for a live, open desktop attendance session."""
+    session = db.query(AttendanceSession).filter(
+        AttendanceSession.id == data.session_id, AttendanceSession.is_open == True
+    ).first()
+    if not session:
+        raise HTTPException(404, "Buổi điểm danh không tồn tại hoặc đã đóng")
+
+    enrolled_ids = {
+        row.student_id for row in db.query(Enrollment.student_id)
+        .filter(Enrollment.class_id == session.class_id).all()
+    }
+    rows = (
+        db.query(FaceData, User)
+        .join(User, User.id == FaceData.user_id)
+        .filter(FaceData.status == FaceDataStatus.APPROVED, FaceData.embedding.isnot(None),
+                User.role == UserRole.STUDENT, User.is_active == True)
+        .all()
+    )
+    query = np.asarray(data.embedding, dtype=np.float32).flatten()
+    if not np.isfinite(query).all() or np.linalg.norm(query) < 1e-8:
+        raise HTTPException(400, "Embedding khuôn mặt không hợp lệ")
+    query /= np.linalg.norm(query) + 1e-8
+    def rank_templates(rebuild_from_images=False):
+        best_by_student = {}
+        usable_count = 0
+        refreshed_count = 0
+        for face, student in rows:
+            try:
+                sample = None
+                if rebuild_from_images and face.image_path:
+                    image_path = Path(__file__).resolve().parent.parent / face.image_path
+                    if image_path.is_file():
+                        extracted = extract_embedding_from_file(str(image_path))
+                        if extracted is not None:
+                            sample = extracted[0].astype(np.float32).flatten()
+                            face.embedding = embedding_to_bytes(sample)
+                            refreshed_count += 1
+                if sample is None and face.embedding:
+                    sample = bytes_to_embedding(face.embedding).astype(np.float32)
+                if sample is None or sample.size != query.size or not np.isfinite(sample).all():
+                    continue
+                sample_norm = np.linalg.norm(sample)
+                if sample_norm < 1e-8:
+                    continue
+                usable_count += 1
+                if student.id in enrolled_ids:
+                    continue
+                sample /= sample_norm
+                sim = float(np.dot(query, sample))
+            except Exception:
+                continue
+            current = best_by_student.get(student.id)
+            if current is None or sim > current["confidence"]:
+                best_by_student[student.id] = {"student": student, "confidence": sim}
+        ranked_matches = sorted(
+            best_by_student.values(), key=lambda item: item["confidence"], reverse=True
+        )
+        return ranked_matches, usable_count, refreshed_count
+
+    ranked, usable_template_count, refreshed_count = rank_templates()
+    # Older approved embeddings may have been produced with a different crop
+    # or color path. Rebuild from the approved source images when the cached
+    # vectors do not produce a confident, unambiguous candidate.
+    needs_rebuild = (
+        not ranked
+        or ranked[0]["confidence"] < DESKTOP_LOOKUP_THRESHOLD
+        or (len(ranked) > 1 and
+            ranked[0]["confidence"] - ranked[1]["confidence"] < DESKTOP_LOOKUP_MARGIN)
+    )
+    if needs_rebuild:
+        ranked, usable_template_count, refreshed_count = rank_templates(rebuild_from_images=True)
+        if refreshed_count:
+            db.commit()
+    if not ranked:
+        reason = "no_approved_templates" if usable_template_count == 0 else "no_candidates"
+        return {"found": False, "reason": reason,
+                "usable_templates": usable_template_count,
+                "embeddings_refreshed": refreshed_count}
+    if ranked[0]["confidence"] < DESKTOP_LOOKUP_THRESHOLD:
+        return {"found": False, "reason": "below_threshold",
+                "confidence": ranked[0]["confidence"],
+                "threshold": DESKTOP_LOOKUP_THRESHOLD,
+                "usable_templates": usable_template_count,
+                "embeddings_refreshed": refreshed_count}
+    if len(ranked) > 1 and ranked[0]["confidence"] - ranked[1]["confidence"] < DESKTOP_LOOKUP_MARGIN:
+        return {"found": False, "reason": "ambiguous", "ambiguous": True,
+                "confidence": ranked[0]["confidence"],
+                "margin": ranked[0]["confidence"] - ranked[1]["confidence"],
+                "usable_templates": usable_template_count,
+                "embeddings_refreshed": refreshed_count}
+    best = ranked[0]
+    student = best["student"]
+    return {
+        "found": True,
+        "student": {"id": student.id, "full_name": student.full_name,
+                    "student_id": student.student_id},
+        "confidence": best["confidence"],
+        "usable_templates": usable_template_count,
+        "embeddings_refreshed": refreshed_count,
+    }
+
+
+@app.post("/api/desktop/session/{session_id}/enrollment-requests")
+def desktop_create_enrollment_request(
+    session_id: int,
+    data: schemas.DesktopEnrollmentRequestCreate,
+    db: Session = Depends(get_db),
+):
+    """Queue a known student from an open desktop session for lecturer approval."""
+    session = db.query(AttendanceSession).filter(
+        AttendanceSession.id == session_id, AttendanceSession.is_open == True
+    ).first()
+    if not session:
+        raise HTTPException(404, "Buổi điểm danh không tồn tại hoặc đã đóng")
+    cls = db.query(Class).filter(Class.id == session.class_id).first()
+    if not cls:
+        raise HTTPException(404, "Lớp của buổi điểm danh không tồn tại")
+    student = db.query(User).filter(User.id == data.student_id, User.role == UserRole.STUDENT,
+                                   User.is_active == True).first()
+    if not student:
+        raise HTTPException(404, "Không tìm thấy sinh viên đang hoạt động")
+    if db.query(Enrollment).filter(
+        Enrollment.student_id == student.id, Enrollment.class_id == session.class_id
+    ).first():
+        raise HTTPException(409, "Sinh viên đã thuộc lớp này")
+    pending = db.query(EnrollmentRequest).filter(
+        EnrollmentRequest.session_id == session_id,
+        EnrollmentRequest.student_id == student.id,
+        EnrollmentRequest.status == "pending",
+    ).first()
+    if pending:
+        return {"request_id": pending.id, "status": pending.status,
+                "message": "Yêu cầu đã được gửi, đang chờ giảng viên duyệt"}
+    requester_id = session.created_by or cls.lecturer_id
+    if requester_id is None:
+        raise HTTPException(409, "Buổi điểm danh chưa gắn với tài khoản giảng viên")
+    request = EnrollmentRequest(
+        session_id=session.id, class_id=session.class_id, student_id=student.id,
+        requested_by=requester_id, confidence=data.confidence, status="pending",
+    )
+    db.add(request)
+    db.commit()
+    db.refresh(request)
+    return {"request_id": request.id, "status": request.status,
+            "message": "Đã gửi yêu cầu đến giảng viên"}
+
+
+@app.get("/api/lecturer/enrollment-requests")
+def list_enrollment_requests(
+    status_filter: str = "pending",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth.require_role(UserRole.ADMIN, UserRole.LECTURER)),
+):
+    query = db.query(EnrollmentRequest).join(
+        Class, Class.id == EnrollmentRequest.class_id
+    ).filter(EnrollmentRequest.status == status_filter)
+    if current_user.role == UserRole.LECTURER:
+        query = query.filter(Class.lecturer_id == current_user.id)
+    requests_list = query.order_by(EnrollmentRequest.created_at.desc()).all()
+    return [{
+        "id": req.id,
+        "student_id": req.student.id,
+        "student_name": req.student.full_name,
+        "student_code": req.student.student_id,
+        "class_id": req.class_id,
+        "class_name": req.class_.name,
+        "room": req.session.room,
+        "session_id": req.session_id,
+        "confidence": req.confidence,
+        "status": req.status,
+        "created_at": req.created_at,
+    } for req in requests_list]
+
+
+@app.post("/api/lecturer/enrollment-requests/{request_id}/review")
+def review_enrollment_request(
+    request_id: int,
+    data: schemas.EnrollmentRequestReview,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth.require_role(UserRole.ADMIN, UserRole.LECTURER)),
+):
+    request = db.query(EnrollmentRequest).filter(EnrollmentRequest.id == request_id).first()
+    if not request:
+        raise HTTPException(404, "Không tìm thấy yêu cầu")
+    if current_user.role == UserRole.LECTURER and request.class_.lecturer_id != current_user.id:
+        raise HTTPException(403, "Bạn không phụ trách lớp này")
+    if request.status != "pending":
+        raise HTTPException(409, "Yêu cầu đã được xử lý")
+
+    now = datetime.now(timezone.utc)
+    if data.approved:
+        enrollment = db.query(Enrollment).filter(
+            Enrollment.student_id == request.student_id,
+            Enrollment.class_id == request.class_id,
+        ).first()
+        if not enrollment:
+            db.add(Enrollment(student_id=request.student_id, class_id=request.class_id))
+        session = request.session
+        if session.is_open:
+            record = db.query(AttendanceRecord).filter(
+                AttendanceRecord.session_id == request.session_id,
+                AttendanceRecord.student_id == request.student_id,
+            ).first()
+            attendance_status = AttendanceStatus.PRESENT
+            session_start = session.start_time
+            # SQLite may return timezone-aware columns as naive datetimes.
+            # Session timestamps are written in UTC, so normalize before subtraction.
+            if session_start and session_start.tzinfo is None:
+                session_start = session_start.replace(tzinfo=timezone.utc)
+            if session_start and (now - session_start).total_seconds() > 15 * 60:
+                attendance_status = AttendanceStatus.LATE
+            if record is None:
+                db.add(AttendanceRecord(
+                    session_id=request.session_id, student_id=request.student_id,
+                    status=attendance_status, check_in_time=now,
+                    confidence=request.confidence, is_manual=False,
+                ))
+            elif record.status == AttendanceStatus.ABSENT:
+                record.status = attendance_status
+                record.check_in_time = now
+                record.confidence = request.confidence
+                record.is_manual = False
+        request.status = "approved"
+    else:
+        request.status = "rejected"
+    request.reviewed_at = now
+    request.reviewed_by = current_user.id
+    db.commit()
+    return {"message": "Đã thêm sinh viên vào lớp và ghi nhận điểm danh" if data.approved
+            else "Đã từ chối yêu cầu", "status": request.status}
 
 
 @app.post("/api/desktop/result")

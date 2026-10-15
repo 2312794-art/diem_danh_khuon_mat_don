@@ -169,6 +169,28 @@ class SpoofLog(Base):
     note = Column(Text, nullable=True)
 
 
+class EnrollmentRequest(Base):
+    """A lecturer-facing request to add an existing student during attendance."""
+    __tablename__ = "enrollment_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("attendance_sessions.id"), nullable=False, index=True)
+    class_id = Column(Integer, ForeignKey("classes.id"), nullable=False, index=True)
+    student_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    requested_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    confidence = Column(Float, nullable=False)
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    session = relationship("AttendanceSession")
+    class_ = relationship("Class")
+    student = relationship("User", foreign_keys=[student_id])
+    requester = relationship("User", foreign_keys=[requested_by])
+    reviewer = relationship("User", foreign_keys=[reviewed_by])
+
+
 def get_db():
     db = SessionLocal()
     try:

@@ -253,6 +253,7 @@
 
     let token = localStorage.getItem('token');
     let user = JSON.parse(localStorage.getItem('user') || 'null');
+    let enrollmentRequestPoll = null;
 
     // Camera state (student face upload)
     let cameraStream = null;
@@ -278,6 +279,8 @@
 
     function logout() {
       stopCamera();
+      if (enrollmentRequestPoll) clearInterval(enrollmentRequestPoll);
+      enrollmentRequestPoll = null;
       token = null; user = null;
       localStorage.removeItem('token'); localStorage.removeItem('user');
       document.getElementById('login-view').classList.remove('hidden');
@@ -319,7 +322,10 @@
       document.getElementById('user-info').textContent = `${user.full_name} (${user.role})`;
       buildSidebar();
       if (user.role === 'admin') renderDashboard();
-      else if (user.role === 'lecturer') renderLecturerDashboard();
+      else if (user.role === 'lecturer') {
+        renderLecturerDashboard();
+        startEnrollmentRequestPolling();
+      }
       else renderStudentDashboard();
     }
 
@@ -340,6 +346,7 @@
           ['Dashboard', renderLecturerDashboard],
           ['Lớp của tôi', renderMyClasses],
           ['Điểm danh', renderAttendance],
+          ['Yêu cầu thêm SV', renderEnrollmentRequests],
         ];
       } else {
         items = [
@@ -348,9 +355,12 @@
           ['Lịch sử điểm danh', renderMyAttendance],
         ];
       }
-      s.innerHTML = items.map(([label, fn], i) =>
-        `<button class="sidebar-link w-full text-left px-3 py-2 ${i===0?'active':''}" onclick="document.querySelectorAll('#sidebar button').forEach(b=>b.classList.remove('active'));this.classList.add('active');(${fn.name})()">${label}</button>`
-      ).join('');
+      s.innerHTML = items.map(([label, fn], i) => {
+        const badge = label === 'Yêu cầu thêm SV'
+          ? '<span id="enrollment-request-badge" class="hidden ml-auto rounded-full bg-rose-500 text-white text-xs px-2 py-0.5">0</span>'
+          : '';
+        return `<button class="sidebar-link w-full text-left px-3 py-2 ${i===0?'active':''} flex items-center gap-2" onclick="document.querySelectorAll('#sidebar button').forEach(b=>b.classList.remove('active'));this.classList.add('active');(${fn.name})()"><span>${label}</span>${badge}</button>`;
+      }).join('');
     }
 
     // ---------- ADMIN ----------
@@ -727,6 +737,79 @@
         const count = document.getElementById('lecturer-class-count');
         if (count) count.textContent = classes.length;
       } catch (e) { console.error(e); }
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[ch]));
+    }
+
+    async function refreshEnrollmentRequestBadge() {
+      if (!user || user.role !== 'lecturer') return;
+      try {
+        const requests = await api('/api/lecturer/enrollment-requests');
+        const badge = document.getElementById('enrollment-request-badge');
+        if (!badge) return;
+        badge.textContent = requests.length;
+        badge.classList.toggle('hidden', requests.length === 0);
+      } catch (e) { console.error(e); }
+    }
+
+    function startEnrollmentRequestPolling() {
+      if (enrollmentRequestPoll) clearInterval(enrollmentRequestPoll);
+      refreshEnrollmentRequestBadge();
+      enrollmentRequestPoll = setInterval(refreshEnrollmentRequestBadge, 12000);
+    }
+
+    async function renderEnrollmentRequests() {
+      const main = document.getElementById('main-content');
+      main.innerHTML = `
+        <div class="flex items-center justify-between gap-3 mb-4">
+          <div><h2 class="text-xl font-bold">Yêu cầu thêm sinh viên</h2>
+            <p class="text-sm text-slate-500 mt-1">Duyệt sinh viên đã có hồ sơ trong hệ thống nhưng chưa thuộc lớp điểm danh.</p></div>
+          <button onclick="renderEnrollmentRequests()" class="bg-[#f1efff] text-[#6b5fca] px-3 py-2 rounded-lg text-sm">Làm mới</button>
+        </div>
+        <div id="enrollment-requests-list" class="card overflow-x-auto"><p class="text-slate-500">Đang tải...</p></div>`;
+      try {
+        const requests = await api('/api/lecturer/enrollment-requests');
+        const box = document.getElementById('enrollment-requests-list');
+        if (!box) return;
+        if (!requests.length) {
+          box.innerHTML = '<div class="text-center py-10 text-slate-500">Hiện không có yêu cầu chờ duyệt.</div>';
+          await refreshEnrollmentRequestBadge();
+          return;
+        }
+        box.innerHTML = `<table class="w-full text-sm min-w-[800px]"><thead><tr class="border-b text-left text-slate-500">
+          <th class="py-3">Sinh viên</th><th>MSSV</th><th>Lớp / Phòng</th><th>Độ khớp</th><th>Thời gian</th><th>Thao tác</th>
+        </tr></thead><tbody>${requests.map(r => `
+          <tr class="border-b">
+            <td class="py-3 font-medium">${escapeHtml(r.student_name)}</td>
+            <td>${escapeHtml(r.student_code || '—')}</td>
+            <td>${escapeHtml(r.class_name)} <span class="text-slate-400">/ ${escapeHtml(r.room || '—')}</span></td>
+            <td>${Number(r.confidence).toFixed(3)}</td>
+            <td>${escapeHtml(r.created_at ? new Date(r.created_at).toLocaleString() : '—')}</td>
+            <td><div class="flex gap-2">
+              <button onclick="reviewEnrollmentRequest(${r.id}, true)" class="bg-emerald-600 text-white px-3 py-1.5 rounded">Duyệt & thêm</button>
+              <button onclick="reviewEnrollmentRequest(${r.id}, false)" class="bg-slate-100 text-slate-600 px-3 py-1.5 rounded">Từ chối</button>
+            </div></td>
+          </tr>`).join('')}</tbody></table>`;
+        await refreshEnrollmentRequestBadge();
+      } catch (e) {
+        const box = document.getElementById('enrollment-requests-list');
+        if (box) box.innerHTML = `<p class="text-red-600">${escapeHtml(e.message)}</p>`;
+      }
+    }
+
+    async function reviewEnrollmentRequest(requestId, approved) {
+      if (approved && !confirm('Thêm sinh viên này vào lớp và ghi nhận điểm danh nếu buổi học còn mở?')) return;
+      try {
+        await api(`/api/lecturer/enrollment-requests/${requestId}/review`, {
+          method: 'POST', body: JSON.stringify({ approved }),
+        });
+        await renderEnrollmentRequests();
+        await refreshEnrollmentRequestBadge();
+      } catch (e) { alert(e.message); }
     }
 
     async function renderMyClasses() {
