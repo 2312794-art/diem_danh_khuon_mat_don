@@ -898,7 +898,7 @@
           <td>${s.session_date}</td>
           <td>${s.is_open ? '<span class="text-green-600">Đang mở</span>' : 'Đã đóng'}</td>
           <td>${s.is_open ? `<button onclick="closeSession(${s.id})" class="text-red-600 text-xs">Đóng</button>` : ''}
-            <button onclick="viewRecords(${s.id})" class="text-indigo-600 text-xs ml-2">Xem</button></td>
+            <button onclick="viewRecords(${s.id})" class="text-indigo-600 text-xs ml-2">Xem / Excel</button></td>
         </tr>`;
         }).join('')}
         </tbody></table>`;
@@ -925,8 +925,22 @@
     }
 
     async function viewRecords(id) {
-      const records = await api('/api/sessions/' + id + '/records');
-      alert(records.map(r => `SV ${r.student_id}${r.student ? ' ('+r.student.full_name+')' : ''}: ${r.status}`).join('\n') || 'Chưa có bản ghi');
+      try {
+        const response = await fetch(API + `/api/sessions/${id}/export`, {
+          headers: { Authorization: 'Bearer ' + token },
+        });
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          throw new Error(error.detail || 'Xuất Excel thất bại');
+        }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `diem_danh_buoi_${id}.xlsx`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (e) { alert(e.message); }
     }
 
     // ---------- STUDENT ----------
@@ -1132,15 +1146,21 @@
             <thead>
               <tr class="border-b text-left">
                 <th class="py-2">Mã buổi</th>
-                <th>Thời gian</th>
+                <th>Lớp</th>
+                <th>Ngày học</th>
+                <th>Thời gian điểm danh</th>
+                <th>Phòng</th>
                 <th>Trạng thái</th>
               </tr>
             </thead>
             <tbody>
               ${records.map(r => `
                 <tr class="border-b">
-                  <td class="py-2">Session #${r.session_id}</td>
-                  <td>${r.timestamp || '-'}</td>
+                  <td class="py-2">Buổi #${r.session_id}</td>
+                  <td>${r.class_name || '-'}</td>
+                  <td>${r.session_date ? new Date(r.session_date).toLocaleString() : '-'}</td>
+                  <td>${r.check_in_time ? new Date(r.check_in_time).toLocaleString() : '-'}</td>
+                  <td>${r.room || '-'}</td>
                   <td><span class="px-2 py-0.5 rounded text-xs ${r.status === 'present' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">${r.status}</span></td>
                 </tr>
               `).join('')}
