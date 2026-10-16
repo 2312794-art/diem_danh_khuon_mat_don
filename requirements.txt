@@ -1,3 +1,4 @@
+# FastAPI & Backend Web
 fastapi>=0.110
 uvicorn[standard]>=0.27
 sqlalchemy>=2.0
@@ -5,12 +6,19 @@ psycopg2-binary>=2.9
 python-jose[cryptography]>=3.3
 passlib[bcrypt]>=1.7
 python-multipart>=0.0.9
-insightface>=0.7
-onnxruntime>=1.17
+pydantic-settings>=2.0
+
+# Computer Vision & AI Inference Engine
 opencv-python-headless>=4.9
+onnxruntime>=1.17
+insightface>=0.7
 numpy>=1.26
 pillow>=10.0
-pydantic-settings>=2.0
-requests>=2.31
-openpyxl>=3.1
+
+# Desktop Client UI & Exporting
 customtkinter>=5.2
+openpyxl>=3.1
+
+# Utility for Auto-downloading AI Models / Weights
+requests>=2.31
+huggingface_hub>=0.20.0

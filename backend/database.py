@@ -5,7 +5,7 @@ from datetime import datetime
 import enum
 import os
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:151205@127.0.0.1:5432/faceattend")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:Bthw0306.,@127.0.0.1:5432/faceattend")
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

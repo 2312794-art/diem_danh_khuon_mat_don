@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 import random
+import sys
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 from dataclasses import dataclass
@@ -23,6 +24,11 @@ import onnxruntime as ort
 
 # Models nằm cạnh project (shared với web backend)
 MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
+PROJECT_ROOT = MODELS_DIR.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+from model_assets import ensure_antispoof_model
+
 SFACE_PATH = MODELS_DIR / "face_recognition_sface_2021dec.onnx"
 YUNET_PATH = MODELS_DIR / "face_detection_yunet_2023mar.onnx"
 # Anti-spoof ONNX (MiniFASNetV2); attendance fails closed if the model is missing.
@@ -142,6 +148,7 @@ def warm_up() -> float:
     t0 = time.perf_counter()
     _get_yunet()
     _get_sface()
+    _get_spoof()
     # dummy frame
     dummy = np.zeros((112, 112, 3), dtype=np.float32)
     try:
@@ -175,7 +182,8 @@ def _get_yunet() -> ort.InferenceSession:
 
 def _get_spoof() -> Optional[ort.InferenceSession]:
     global _sess_spoof
-    if _sess_spoof is None and ANTISPOOF_PATH.exists():
+    if _sess_spoof is None:
+        ensure_antispoof_model(ANTISPOOF_PATH)
         _sess_spoof = ort.InferenceSession(
             str(ANTISPOOF_PATH), sess_options=_so_options, providers=_providers()
         )
