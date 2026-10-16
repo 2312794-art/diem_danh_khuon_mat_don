@@ -2,12 +2,13 @@ from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, F
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime, timezone
 import os
 import shutil
+from io import BytesIO
 from pathlib import Path
 
 from database import (
@@ -608,7 +609,134 @@ def session_records(
     db: Session = Depends(get_db),
     current_user: User = Depends(auth.get_current_user),
 ):
+    session = db.query(AttendanceSession).filter(AttendanceSession.id == session_id).first()
+    if not session:
+        raise HTTPException(404, "Không tìm thấy buổi điểm danh")
+    if current_user.role == UserRole.STUDENT:
+        raise HTTPException(403)
+    if current_user.role == UserRole.LECTURER:
+        cls = db.query(Class).filter(Class.id == session.class_id).first()
+        if not cls or cls.lecturer_id != current_user.id:
+            raise HTTPException(403)
     return db.query(AttendanceRecord).filter(AttendanceRecord.session_id == session_id).all()
+
+
+@app.get("/api/classes/{class_id}/attendance/export")
+def export_class_attendance(
+    class_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth.require_role(UserRole.ADMIN, UserRole.LECTURER)),
+):
+    """Export a class attendance matrix as an Excel workbook."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    cls = db.query(Class).filter(Class.id == class_id).first()
+    if not cls:
+        raise HTTPException(404, "Không tìm thấy lớp")
+    if current_user.role == UserRole.LECTURER and cls.lecturer_id != current_user.id:
+        raise HTTPException(403)
+
+    sessions = db.query(AttendanceSession).filter(
+        AttendanceSession.class_id == class_id
+    ).order_by(AttendanceSession.session_date.asc(), AttendanceSession.id.asc()).all()
+    enrollments = db.query(Enrollment).filter(Enrollment.class_id == class_id).all()
+    student_ids = [e.student_id for e in enrollments]
+    students = db.query(User).filter(User.id.in_(student_ids)).order_by(User.full_name.asc()).all() if student_ids else []
+    records = db.query(AttendanceRecord).join(
+        AttendanceSession, AttendanceRecord.session_id == AttendanceSession.id
+    ).filter(AttendanceSession.class_id == class_id).all()
+    record_map = {(r.student_id, r.session_id): r.status.value for r in records}
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Điểm danh"
+    sheet.append(["MSSV", "Họ và tên"] + [s.session_date.strftime("%d/%m/%Y %H:%M") for s in sessions])
+    for cell in sheet[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="4F46E5")
+    for student in students:
+        sheet.append([
+            student.student_id or student.username,
+            student.full_name,
+            *[record_map.get((student.id, session.id), "") for session in sessions],
+        ])
+    sheet.freeze_panes = "C2"
+    sheet.auto_filter.ref = sheet.dimensions
+    sheet.column_dimensions["A"].width = 18
+    sheet.column_dimensions["B"].width = 30
+    for col in range(3, len(sessions) + 3):
+        sheet.column_dimensions[get_column_letter(col)].width = 20
+
+    content = BytesIO()
+    workbook.save(content)
+    content.seek(0)
+    filename = f"attendance_class_{class_id}.xlsx"
+    return StreamingResponse(
+        content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/sessions/{session_id}/export")
+def export_session_attendance(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth.require_role(UserRole.ADMIN, UserRole.LECTURER)),
+):
+    """Export the enrolled roster and attendance status for one session."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+
+    session = db.query(AttendanceSession).filter(AttendanceSession.id == session_id).first()
+    if not session:
+        raise HTTPException(404, "Không tìm thấy buổi điểm danh")
+    cls = db.query(Class).filter(Class.id == session.class_id).first()
+    if not cls:
+        raise HTTPException(404, "Không tìm thấy lớp")
+    if current_user.role == UserRole.LECTURER and cls.lecturer_id != current_user.id:
+        raise HTTPException(403)
+
+    enrollments = db.query(Enrollment).filter(Enrollment.class_id == cls.id).all()
+    student_ids = [enrollment.student_id for enrollment in enrollments]
+    students = db.query(User).filter(User.id.in_(student_ids)).order_by(User.full_name.asc()).all() if student_ids else []
+    records = db.query(AttendanceRecord).filter(AttendanceRecord.session_id == session_id).all()
+    record_map = {record.student_id: record for record in records}
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Điểm danh"
+    sheet.append(["MSSV", "Họ và tên", "Lớp", "Ngày học", "Phòng", "Trạng thái", "Giờ điểm danh"])
+    for cell in sheet[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="4F46E5")
+    for student in students:
+        record = record_map.get(student.id)
+        sheet.append([
+            student.student_id or student.username,
+            student.full_name,
+            cls.name,
+            session.session_date.strftime("%d/%m/%Y %H:%M"),
+            session.room or "",
+            record.status.value if record else "Chưa điểm danh",
+            record.check_in_time.strftime("%d/%m/%Y %H:%M:%S") if record and record.check_in_time else "",
+        ])
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    for column, width in {"A": 18, "B": 30, "C": 22, "D": 20, "E": 16, "F": 20, "G": 24}.items():
+        sheet.column_dimensions[column].width = width
+
+    content = BytesIO()
+    workbook.save(content)
+    content.seek(0)
+    filename = f"attendance_session_{session_id}.xlsx"
+    return StreamingResponse(
+        content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/api/sessions/{session_id}/manual")
@@ -643,7 +771,8 @@ def manual_attendance(
 
 
 # ==================== STUDENT ATTENDANCE HISTORY ====================
-@app.get("/api/my/attendance")
+@app.get("/api/attendance/my")
+@app.get("/api/my/attendance", include_in_schema=False)
 def my_attendance(
     db: Session = Depends(get_db),
     current_user: User = Depends(auth.get_current_user),
