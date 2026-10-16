@@ -34,7 +34,7 @@ except ImportError:
 
 # Edge AI monolithic
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from edge_ai import process_frame, warm_up, EdgeResult, train_templates
+from edge_ai import process_frame, warm_up, EdgeResult, ActiveLiveness, train_templates
 
 API_BASE = os.getenv("FACE_API", "http://127.0.0.1:8000").rstrip("/")
 try:
@@ -68,6 +68,7 @@ class FaceAttendanceApp:
         self.room = None
         self.class_name = ""
         self.gallery = []  # [(id, name, emb np)]
+        self._gallery_empty_message = "Gallery rỗng — chưa có sinh viên đủ điều kiện nhận diện"
         self.students_by_id = {}
         self.attendance_rows = {}
         self.unknown_rows = 0
@@ -84,6 +85,7 @@ class FaceAttendanceApp:
         self.frame_i = 0
         self.fps_times = deque(maxlen=30)
         self.last_result: Optional[EdgeResult] = None
+        self._active_liveness = ActiveLiveness()
         self._lock = threading.Lock()
         self._ui_thread_id = threading.get_ident()
 
@@ -618,10 +620,29 @@ class FaceAttendanceApp:
             self.gallery = train_templates(raw_samples)
             n_sv = len(self.gallery)
             n_samples = len(raw_samples)
+            if n_sv == 0:
+                enrolled_count = int(data.get("enrolled_count", 0))
+                approved_face_count = int(data.get("approved_face_count", 0))
+                if enrolled_count == 0:
+                    self._gallery_empty_message = (
+                        "Lớp chưa có sinh viên — bấm Đồng bộ session sau khi giảng viên thêm"
+                    )
+                elif approved_face_count == 0:
+                    self._gallery_empty_message = (
+                        f"Có {enrolled_count} SV trong lớp nhưng chưa có ảnh khuôn mặt được admin duyệt"
+                    )
+                else:
+                    self._gallery_empty_message = (
+                        f"Có {enrolled_count} SV, {approved_face_count} ảnh đã duyệt nhưng không tạo được mẫu SFace"
+                    )
+            else:
+                self._gallery_empty_message = ""
             self.log(
                 f"Đồng bộ OK: {self.class_name} | session#{self.session_id} | "
                 f"{n_sv} SV | {n_samples} mẫu (đã train centroid)"
             )
+            if n_sv == 0:
+                self.log(self._gallery_empty_message)
             for uid, name, centroid, samples in self.gallery:
                 self.log(f"  · {name}: {len(samples)} ảnh")
                 if len(samples) > 1:
@@ -729,11 +750,11 @@ class FaceAttendanceApp:
                 if not self.gallery:
                     res = EdgeResult(
                         False, False, None, None, 0.0, 0.0,
-                        "Gallery rỗng — chưa có SV duyệt khuôn mặt",
+                        self._gallery_empty_message,
                     )
                 else:
                     try:
-                        res = process_frame(frame, self.gallery)
+                        res = process_frame(frame, self.gallery, self._active_liveness)
                     except Exception as e:
                         res = EdgeResult(
                             False, False, None, None, 0.0, 0.0,
@@ -822,6 +843,11 @@ class FaceAttendanceApp:
 
     def _handle_result(self, result: EdgeResult, frame_bgr):
         now = time.time()
+        if result.liveness_pending:
+            if now - getattr(self, "_last_liveness_log", 0) > 3:
+                self._last_liveness_log = now
+                self.log(f"Xác thực sống: {result.message}")
+            return
         if result.is_spoof:
             # log spoof tối đa mỗi 3s
             if now - getattr(self, "_last_spoof_log", 0) > 3:

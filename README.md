@@ -4,7 +4,7 @@
 - **Backend**: Python 3.12+, FastAPI, SQLAlchemy
 - **Database**: PostgreSQL 16
 - **Nhận diện**: InsightFace (buffalo_l – tương đương / vượt SFace)
-- **Chống giả mạo**: Heuristic + sẵn sàng tích hợp MiniFASNet / Silent-Face-Anti-Spoofing
+- **Chống giả mạo**: MiniFASNetV2 ONNX; fail closed nếu thiếu model
 - **Web UI**: HTML + Tailwind + Vanilla JS
 - **Desktop**: CustomTkinter / Tkinter + OpenCV
 
@@ -71,9 +71,13 @@ python desktop/attendance_app.py
 - `POST /api/desktop/checkin` (desktop gửi frame)
 
 ## Ghi chú chống giả mạo
-Hiện dùng heuristic (Laplacian variance + color std). Để production:
-1. Tải model MiniFASNet ONNX từ Silent-Face-Anti-Spoofing
-2. Thay hàm `check_anti_spoof` trong `backend/face_utils.py`
+Desktop và backend dùng MiniFASNetV2 ONNX ở `models/antispoof_minifasnet.onnx`.
+Ứng dụng crop vùng mặt mở rộng theo đúng tiền xử lý của model, rồi phân lớp thật/giả.
+Nếu model thiếu hoặc inference lỗi, điểm danh và upload ảnh khuôn mặt bị từ chối an toàn;
+không dùng heuristic độ nét/màu vì ảnh trên màn hình điện thoại có thể vượt qua heuristic đó.
+
+Model tham khảo từ [yakhyo/face-anti-spoofing](https://github.com/yakhyo/face-anti-spoofing),
+MiniFASNetV2 ONNX; mã nguồn phát hành theo Apache-2.0. Xem `models/ANTI_SPOOFING_MODEL.md`.
 
 ## Cấu trúc thư mục
 ```

@@ -1,0 +1,61 @@
+Byte-compiled / optimized / DLL files (Python cache)
+
+pycache/
+*.py[cod]
+*$py.class
+*.so
+
+Environments & Virtual Envs
+
+.venv/
+venv/
+ENV/
+env/
+*.venv
+
+Environment variables & secrets
+
+.env
+.env.local
+*.env
+
+SQLite / Database local files
+
+*.db
+*.sqlite
+*.sqlite3
+
+Uploads & Media Files (Ignoring images, evidence photos)
+
+uploads/spoof/
+uploads/faces/
+uploads/*
+!uploads/.gitkeep
+
+# ==========================================
+# Large Models & Weights (Chặn model AI nặng)
+# ==========================================
+models/*.onnx
+*.onnx
+*.pt
+*.h5
+*.dat
+*.pkl
+
+Logs & Temporary files
+
+*.log
+logs/
+*.tmp
+
+IDE / Editor specific settings
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+OS specific files
+
+.DS_Store
+Thumbs.db

@@ -12,6 +12,7 @@ Pipeline: Camera frame → YuNet (lọc mặt lớn nhất) → Anti-spoof → S
 from __future__ import annotations
 
 import time
+import random
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 from dataclasses import dataclass
@@ -24,19 +25,12 @@ import onnxruntime as ort
 MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 SFACE_PATH = MODELS_DIR / "face_recognition_sface_2021dec.onnx"
 YUNET_PATH = MODELS_DIR / "face_detection_yunet_2023mar.onnx"
-# Anti-spoof ONNX (MiniFASNet) — nếu chưa có sẽ dùng heuristic mạnh hơn + flag
+# Anti-spoof ONNX (MiniFASNetV2); attendance fails closed if the model is missing.
 ANTISPOOF_PATH = MODELS_DIR / "antispoof_minifasnet.onnx"
 
 # Ngưỡng cosine SFace (OpenCV ~0.363). Hạ nhẹ để dễ khớp thực tế webcam.
 SFACE_COSINE_THRESHOLD = 0.28
 SFACE_COSINE_MARGIN = 0.06
-# Anti-spoof heuristic — nới để không chặn mặt thật trên webcam kém sáng
-# These are low-confidence fallback heuristics, not a trained liveness model.
-# Normalize the face crop before measuring so the result is less dependent on
-# how large the face appears in the webcam frame.
-SPOOF_SHARPNESS_MIN = 12.0
-SPOOF_COLOR_STD_MIN = 7.0
-
 # Session ONNX dùng chung (lazy, CPU only)
 _sess_sface: Optional[ort.InferenceSession] = None
 _sess_yunet: Optional[ort.InferenceSession] = None
@@ -59,6 +53,84 @@ class EdgeResult:
     message: str
     bbox: Optional[List[float]] = None
     embedding: Optional[np.ndarray] = None
+    liveness_pending: bool = False
+
+
+class ActiveLiveness:
+    """Randomized head-turn challenge layered on top of per-frame MiniFASNet."""
+
+    def __init__(self):
+        self.student_id = None
+        self.started_at = 0.0
+        self.baseline = None
+        self.first_direction = random.choice((-1, 1))
+        self.step = 0
+        self.hold_count = 0
+        self.complete_until = 0.0
+
+    def reset(self, student_id=None):
+        self.student_id = student_id
+        self.started_at = time.monotonic() if student_id is not None else 0.0
+        self.baseline = None
+        self.first_direction = random.choice((-1, 1))
+        self.step = 0
+        self.hold_count = 0
+        self.complete_until = 0.0
+
+    def advance(self, student_id, face):
+        now = time.monotonic()
+        if self.student_id != student_id or (self.started_at and now - self.started_at > 15):
+            self.reset(student_id)
+        if self.step >= 4 and self.complete_until <= now:
+            self.reset(student_id)
+        if self.complete_until > now:
+            return True, "Xác thực sống thành công"
+
+        points = face.get("kps")
+        if points is None:
+            return False, "Cần camera YuNet: không thể xác thực chuyển động khuôn mặt"
+        points = np.asarray(points, dtype=np.float32).reshape(5, 2)
+        eye_distance = float(np.linalg.norm(points[1] - points[0]))
+        if eye_distance < 8:
+            return False, "Đưa khuôn mặt gần camera hơn"
+        # YuNet nose displacement normalized by eye distance is a simple yaw cue.
+        yaw = float((points[2][0] - (points[0][0] + points[1][0]) / 2) / eye_distance)
+
+        if self.baseline is None:
+            if abs(yaw) > 0.18:
+                return False, "Nhìn thẳng vào camera để bắt đầu xác thực"
+            self.baseline = yaw
+            return False, self._prompt()
+
+        # Steps: turn one way, return to center, turn the other way, return.
+        targets = (self.first_direction, 0, -self.first_direction, 0)
+        target = targets[self.step]
+        delta = yaw - self.baseline
+        reached = abs(delta) < 0.09 if target == 0 else delta * target > 0.17
+        if reached:
+            self.hold_count += 1
+            if self.hold_count >= 2:
+                self.step += 1
+                self.hold_count = 0
+                if self.step >= len(targets):
+                    self.complete_until = now + 2.0
+                    return True, "Xác thực sống thành công"
+        else:
+            self.hold_count = 0
+        return False, self._prompt()
+
+    def _prompt(self):
+        if self.baseline is None:
+            return "Nhìn thẳng vào camera để bắt đầu xác thực"
+        first_side = "phải" if self.first_direction > 0 else "trái"
+        other_side = "trái" if self.first_direction > 0 else "phải"
+        prompts = (
+            f"Quay đầu sang {first_side} màn hình và giữ nhẹ",
+            "Nhìn thẳng lại camera",
+            f"Quay đầu sang {other_side} màn hình và giữ nhẹ",
+            "Nhìn thẳng lại để hoàn tất",
+        )
+        return prompts[min(self.step, len(prompts) - 1)]
 
 
 def _providers():
@@ -108,6 +180,29 @@ def _get_spoof() -> Optional[ort.InferenceSession]:
             str(ANTISPOOF_PATH), sess_options=_so_options, providers=_providers()
         )
     return _sess_spoof
+
+
+def _antispoof_crop(image_bgr: np.ndarray, bbox: Optional[list], scale: float = 2.7) -> np.ndarray:
+    """Crop an expanded BGR face patch for MiniFASNetV2 (80x80, 0..255)."""
+    if bbox is None:
+        raise ValueError("MiniFASNet cần bounding box khuôn mặt")
+    h, w = image_bgr.shape[:2]
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    box_w, box_h = x2 - x1, y2 - y1
+    if box_w <= 0 or box_h <= 0:
+        raise ValueError("Bounding box khuôn mặt không hợp lệ")
+    ratio = min((h - 1) / box_h, (w - 1) / box_w, scale)
+    crop_w, crop_h = box_w * ratio, box_h * ratio
+    cx, cy = x1 + box_w / 2, y1 + box_h / 2
+    left = max(0, int(cx - crop_w / 2))
+    top = max(0, int(cy - crop_h / 2))
+    right = min(w - 1, int(cx + crop_w / 2))
+    bottom = min(h - 1, int(cy + crop_h / 2))
+    crop = image_bgr[top:bottom + 1, left:right + 1]
+    if crop.size == 0:
+        raise ValueError("Không crop được khuôn mặt cho MiniFASNet")
+    import cv2
+    return cv2.resize(crop, (80, 80), interpolation=cv2.INTER_LINEAR)
 
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
@@ -383,62 +478,25 @@ def extract_sface_embedding(aligned_bgr: np.ndarray) -> np.ndarray:
 
 
 def check_anti_spoof(image_bgr: np.ndarray, bbox: Optional[list] = None) -> Tuple[bool, float]:
-    """
-    Anti-spoof:
-    1) Nếu có MiniFASNet ONNX → dùng model (mục tiêu APCER<0.5%, BPCER<2%)
-    2) Fallback heuristic siết (ưu tiên giảm APCER)
-    """
-    sess = _get_spoof()
-    crop = image_bgr
-    if bbox is not None:
-        x1, y1, x2, y2 = [int(v) for v in bbox]
-        hh, ww = image_bgr.shape[:2]
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(ww, x2), min(hh, y2)
-        if x2 > x1 and y2 > y1:
-            crop = image_bgr[y1:y2, x1:x2]
-
-    # Keep heuristic scores comparable across camera resolutions and distances.
-    if crop.size:
-        try:
-            import cv2
-            crop = cv2.resize(crop, (128, 128), interpolation=cv2.INTER_AREA)
-        except Exception:
-            pass
-
-    if sess is not None:
-        try:
-            # MiniFASNet thường input 80x80 hoặc 128x128 RGB normalized
-            rgb = crop[:, :, ::-1]
-            pil = Image.fromarray(rgb).resize((80, 80), Image.BILINEAR)
-            arr = np.array(pil).astype(np.float32) / 255.0
-            blob = arr.transpose(2, 0, 1)[np.newaxis, ...]
-            out = sess.run(None, {sess.get_inputs()[0].name: blob})[0]
-            # giả định output [real_prob, spoof_prob] hoặc spoof_score
-            if out.size >= 2:
-                real_p = float(out.flat[0])
-                is_real = real_p >= 0.5
-                return is_real, real_p if is_real else 1.0 - real_p
-            score = float(out.flat[0])
-            is_real = score < 0.5
-            return is_real, abs(0.5 - score) * 2
-        except Exception:
-            pass
-
-    # Heuristic fallback only: avoid rejecting a real face for one noisy
-    # webcam measurement. This is not a substitute for a trained liveness model.
-    gray = np.dot(crop[..., :3].astype(np.float32), [0.114, 0.587, 0.299])
-    if gray.size == 0:
+    """Run MiniFASNetV2; fail closed when the model is missing or errors."""
+    try:
+        sess = _get_spoof()
+        if sess is None:
+            return False, 0.0
+        crop = _antispoof_crop(image_bgr, bbox)
+        blob = crop.astype(np.float32).transpose(2, 0, 1)[np.newaxis, ...]
+        input_meta = sess.get_inputs()[0]
+        output = np.asarray(sess.run(None, {input_meta.name: blob})[0], dtype=np.float32)
+        logits = output.reshape(1, -1)
+        if logits.shape[1] < 2 or not np.isfinite(logits).all():
+            return False, 0.0
+        logits -= np.max(logits, axis=1, keepdims=True)
+        probs = np.exp(logits)
+        probs /= np.sum(probs, axis=1, keepdims=True) + 1e-8
+        real_confidence = float(probs[0, 1])  # MiniFASNetV2 class 1 = real
+        return real_confidence >= 0.5, real_confidence
+    except Exception:
         return False, 0.0
-    gy, gx = np.gradient(gray.astype(np.float64))
-    sharpness = float(np.var(gx) + np.var(gy))
-    color_std = float(np.std(crop))
-    # Màn hình/ảnh in thường kém sắc nét hoặc ít variance màu
-    is_real = sharpness >= SPOOF_SHARPNESS_MIN and color_std >= SPOOF_COLOR_STD_MIN
-    conf = min(1.0, (sharpness / 200.0) * 0.55 + (color_std / 80.0) * 0.45)
-    if not is_real:
-        conf = max(0.0, 1.0 - conf)
-    return is_real, float(conf)
 
 
 def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
@@ -516,6 +574,7 @@ def match_gallery(
 def process_frame(
     image_bgr: np.ndarray,
     gallery: List,
+    liveness: Optional[ActiveLiveness] = None,
 ) -> EdgeResult:
     """
     Full edge pipeline. gallery = templates từ train_templates() hoặc list (id,name,emb).
@@ -538,9 +597,14 @@ def process_frame(
     is_real, spoof_score = check_anti_spoof(image_bgr, bbox)
     if not is_real:
         ms = (time.perf_counter() - t0) * 1000
+        message = (
+            "Thiếu model anti-spoof MiniFASNet; điểm danh bị khóa an toàn"
+            if not ANTISPOOF_PATH.is_file()
+            else "Từ chối: nghi ngờ giả mạo"
+        )
         return EdgeResult(
             False, True, None, None, spoof_score, ms,
-            "Từ chối: nghi ngờ giả mạo", bbox=bbox,
+            message, bbox=bbox,
         )
 
     aligned = align_face(image_bgr, face)
@@ -551,6 +615,15 @@ def process_frame(
     if sid is None:
         return EdgeResult(False, False, None, None, sim, ms,
                           f"Không khớp (sim={sim:.3f})", bbox=bbox, embedding=emb)
+
+    if liveness is not None:
+        live, live_message = liveness.advance(sid, face)
+        ms = (time.perf_counter() - t0) * 1000
+        if not live:
+            return EdgeResult(
+                False, False, sid, name, sim, ms, live_message,
+                bbox=bbox, liveness_pending=True,
+            )
 
     return EdgeResult(
         True, False, sid, name, sim, ms,

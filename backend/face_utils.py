@@ -20,6 +20,7 @@ MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 SFACE_PATH = MODELS_DIR / "face_recognition_sface_2021dec.onnx"
 YUNET_PATH = MODELS_DIR / "face_detection_yunet_2023mar.onnx"
+ANTISPOOF_PATH = MODELS_DIR / "antispoof_minifasnet.onnx"
 
 # Ngưỡng cosine tham chiếu của SFace theo OpenCV. Gallery thực tế cần hiệu
 # chỉnh theo dữ liệu enroll, nhưng không nên siết cao hơn mặc định tùy tiện.
@@ -30,6 +31,20 @@ _yunet_session: Optional[ort.InferenceSession] = None
 _cv_sface = None
 _cv_yunet = None
 _cv_yunet_size = (0, 0)
+_antispoof_session: Optional[ort.InferenceSession] = None
+
+
+def _get_antispoof_session() -> Optional[ort.InferenceSession]:
+    global _antispoof_session
+    if _antispoof_session is None and ANTISPOOF_PATH.is_file():
+        _antispoof_session = ort.InferenceSession(
+            str(ANTISPOOF_PATH), providers=["CPUExecutionProvider"]
+        )
+    return _antispoof_session
+
+
+def anti_spoof_model_available() -> bool:
+    return ANTISPOOF_PATH.is_file()
 
 
 def _get_sface() -> ort.InferenceSession:
@@ -271,62 +286,39 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def check_anti_spoof(image_bgr: np.ndarray, face_bbox: Optional[list] = None) -> Tuple[bool, float]:
-    """
-    Kiem tra Anti-Spoofing nang cao (Chong anh in / Man hinh dien thoai).
-    Dat tieu chuan APCER < 0.5% & BPCER < 2.0%.
-    """
-    h_img, w_img = image_bgr.shape[:2]
-    
-    # 1. Neu co bbox, crop rong (scale 1.5x) de kiem tra ca vien va be mat khuon mat
-    if face_bbox is not None:
-        x1, y1, x2, y2 = [int(v) for v in face_bbox]
-        bw, bh = x2 - x1, y2 - y1
-        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-        
-        side = int(max(bw, bh) * 1.5)
-        nx1, ny1 = max(0, cx - side // 2), max(0, cy - side // 2)
-        nx2, ny2 = min(w_img, cx + side // 2), min(h_img, cy + side // 2)
-        
-        crop = image_bgr[ny1:ny2, nx1:nx2]
-        if crop.size > 0:
-            target_img = crop
-        else:
-            target_img = image_bgr
-    else:
-        target_img = image_bgr
-
-    # Normalize crop dimensions so blur scores do not change with camera
-    # resolution or distance from the camera.
+    """Run MiniFASNetV2 on an expanded BGR face crop; fail closed on errors."""
     try:
+        session = _get_antispoof_session()
+        if session is None or face_bbox is None:
+            return False, 0.0
+        h, w = image_bgr.shape[:2]
+        x1, y1, x2, y2 = [float(v) for v in face_bbox]
+        box_w, box_h = x2 - x1, y2 - y1
+        if box_w <= 0 or box_h <= 0:
+            return False, 0.0
+        scale = min((h - 1) / box_h, (w - 1) / box_w, 2.7)
+        crop_w, crop_h = box_w * scale, box_h * scale
+        cx, cy = x1 + box_w / 2, y1 + box_h / 2
+        left, top = max(0, int(cx - crop_w / 2)), max(0, int(cy - crop_h / 2))
+        right, bottom = min(w - 1, int(cx + crop_w / 2)), min(h - 1, int(cy + crop_h / 2))
+        crop = image_bgr[top:bottom + 1, left:right + 1]
+        if crop.size == 0:
+            return False, 0.0
         import cv2
-        target_img = cv2.resize(target_img, (128, 128), interpolation=cv2.INTER_AREA)
+        crop = cv2.resize(crop, (80, 80), interpolation=cv2.INTER_LINEAR)
+        blob = crop.astype(np.float32).transpose(2, 0, 1)[np.newaxis, ...]
+        input_meta = session.get_inputs()[0]
+        output = np.asarray(session.run(None, {input_meta.name: blob})[0], dtype=np.float32)
+        logits = output.reshape(1, -1)
+        if logits.shape[1] < 2 or not np.isfinite(logits).all():
+            return False, 0.0
+        logits -= np.max(logits, axis=1, keepdims=True)
+        probs = np.exp(logits)
+        probs /= np.sum(probs, axis=1, keepdims=True) + 1e-8
+        real_confidence = float(probs[0, 1])  # MiniFASNetV2 class 1 = real
+        return real_confidence >= 0.5, real_confidence
     except Exception:
-        pass
-
-    gray = np.dot(target_img[..., :3].astype(np.float32), [0.114, 0.587, 0.299])
-
-    # --- Phanchuyen 1: Do do sac net Laplace (Laplacian Variance) ---
-    gy, gx = np.gradient(gray.astype(np.float64))
-    lap_var = float(np.var(gx) + np.var(gy))
-
-    # --- Phanchuyen 3: Do da dang va do lech mau sac (Color Diversity) ---
-    color_std = float(np.std(target_img))
-
-    # Webcam blur, exposure and compression vary widely. Moire alone is not a
-    # reliable spoof signal, so use a permissive fallback until a validated
-    # liveness model is installed.
-    is_real = (lap_var > 12.0) and (color_std > 7.0)
-
-    # Tinh diem tin cua trong khoang [0.0, 1.0]
-    score_lap = min(1.0, lap_var / 150.0)
-    score_color = min(1.0, color_std / 60.0)
-    confidence = 0.55 * score_lap + 0.45 * score_color
-    confidence = float(np.clip(confidence, 0.0, 1.0))
-
-    if not is_real:
-        confidence = min(confidence, 0.45)  # Tra ve diem thap neu vi pham nguong an toan
-
-    return is_real, confidence
+        return False, 0.0
 
 
 def match_face(

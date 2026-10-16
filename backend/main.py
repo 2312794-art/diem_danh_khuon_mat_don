@@ -19,7 +19,7 @@ import schemas, auth
 from face_utils import (
     extract_embedding_from_file, extract_embedding, embedding_to_bytes,
     bytes_to_embedding, match_face, check_anti_spoof, save_image, UPLOADS_DIR,
-    load_image_bgr, load_image_bgr_from_bytes,
+    load_image_bgr, load_image_bgr_from_bytes, anti_spoof_model_available,
 )
 import numpy as np
 
@@ -381,6 +381,8 @@ async def upload_face(
     """Student uploads face image for recognition."""
     if current_user.role != UserRole.STUDENT:
         raise HTTPException(403, "Chỉ sinh viên được upload dữ liệu khuôn mặt")
+    if not anti_spoof_model_available():
+        raise HTTPException(503, "Thiếu model anti-spoof MiniFASNet; chưa thể kiểm tra ảnh đăng ký")
     # Save temp
     ext = Path(file.filename).suffix or ".jpg"
     tmp_path = UPLOADS_DIR / "temp" / f"{current_user.id}_{datetime.now().strftime('%Y%m%d%H%M%S')}{ext}"
@@ -688,6 +690,7 @@ def get_open_session_by_room(room: str, db: Session = Depends(get_db)):
         return {"found": False}
     students = []
     enrollments = db.query(Enrollment).filter(Enrollment.class_id == cls.id).all()
+    approved_face_count = 0
     for enr in enrollments:
         student = db.query(User).filter(User.id == enr.student_id).first()
         if not student:
@@ -701,6 +704,7 @@ def get_open_session_by_room(room: str, db: Session = Depends(get_db)):
             )
             .all()
         )
+        approved_face_count += len(faces)
         embeddings = []
         embedding_face_ids = []
         rebuilt_count = 0
@@ -742,6 +746,8 @@ def get_open_session_by_room(room: str, db: Session = Depends(get_db)):
         "class_id": session.class_id,
         "class_name": cls.name,
         "room": session.room,
+        "enrolled_count": len(enrollments),
+        "approved_face_count": approved_face_count,
         "students": students,
     }
 
@@ -755,6 +761,8 @@ async def desktop_checkin(
     db: Session = Depends(get_db),
 ):
     """Desktop sends captured frame for recognition + anti-spoof."""
+    if not anti_spoof_model_available():
+        raise HTTPException(503, "Thiếu model anti-spoof MiniFASNet; điểm danh đã bị khóa")
     # Save temp
     tmp = UPLOADS_DIR / "temp" / f"checkin_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.jpg"
     tmp.parent.mkdir(parents=True, exist_ok=True)
