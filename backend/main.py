@@ -52,6 +52,8 @@ app.mount("/uploads", StaticFiles(directory=str(uploads_path)), name="uploads")
 @app.on_event("startup")
 def on_startup():
     init_db()
+    if not anti_spoof_model_available():
+        print("WARNING: MiniFASNet model unavailable; anti-spoof endpoints will fail closed")
     # Seed admin if not exists
     db = next(get_db())
     try:

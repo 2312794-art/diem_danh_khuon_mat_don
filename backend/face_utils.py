@@ -6,6 +6,7 @@ Không dùng buffalo_l / InsightFace recognition — chỉ SFace.
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 from typing import Optional, Tuple, List
 from io import BytesIO
 
@@ -14,6 +15,11 @@ from PIL import Image
 import onnxruntime as ort
 
 MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
+PROJECT_ROOT = MODELS_DIR.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+from model_assets import ensure_antispoof_model
+
 UPLOADS_DIR = Path(__file__).resolve().parent.parent / "uploads"
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
@@ -36,7 +42,8 @@ _antispoof_session: Optional[ort.InferenceSession] = None
 
 def _get_antispoof_session() -> Optional[ort.InferenceSession]:
     global _antispoof_session
-    if _antispoof_session is None and ANTISPOOF_PATH.is_file():
+    if _antispoof_session is None:
+        ensure_antispoof_model(ANTISPOOF_PATH)
         _antispoof_session = ort.InferenceSession(
             str(ANTISPOOF_PATH), providers=["CPUExecutionProvider"]
         )
@@ -44,7 +51,13 @@ def _get_antispoof_session() -> Optional[ort.InferenceSession]:
 
 
 def anti_spoof_model_available() -> bool:
-    return ANTISPOOF_PATH.is_file()
+    if _antispoof_session is not None:
+        return True
+    try:
+        ensure_antispoof_model(ANTISPOOF_PATH)
+        return True
+    except RuntimeError:
+        return False
 
 
 def _get_sface() -> ort.InferenceSession:
