@@ -3,8 +3,7 @@ Byte-compiled / optimized / DLL files (Python cache)
 pycache/
 *.py[cod]
 *$py.class
-*.so
-
+.Python
 Environments & Virtual Envs
 
 .venv/
